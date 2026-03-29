@@ -279,9 +279,9 @@ export default function ReviewOverlay({
         <div className="flex-1 relative" ref={containerRef}>
           {/* iframe - loads the real site */}
           <iframe
-            src={siteUrl}
+            src={`/api/proxy?url=${encodeURIComponent(siteUrl)}`}
             className="w-full h-full border-none"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            sandbox="allow-scripts allow-forms allow-popups"
             title={projectName}
           />
 
