@@ -28,7 +28,7 @@ interface CommentSidebarProps {
   onDelete: (id: string) => void;
   isOpen: boolean;
   onToggle: () => void;
-  mode: "admin" | "reviewer";
+  mode: "admin" | "reviewer" | "dev";
 }
 
 export default function CommentSidebar({

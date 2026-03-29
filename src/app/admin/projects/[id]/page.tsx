@@ -37,6 +37,7 @@ export default function ProjectDetailPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "open" | "resolved">("all");
   const [copied, setCopied] = useState(false);
+  const [copiedDev, setCopiedDev] = useState(false);
 
   const fetchProject = useCallback(async () => {
     try {
@@ -77,6 +78,15 @@ export default function ProjectDetailPage() {
     );
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const copyDevLink = async () => {
+    if (!project) return;
+    await navigator.clipboard.writeText(
+      `${window.location.origin}/review/${project.slug}?mode=dev`
+    );
+    setCopiedDev(true);
+    setTimeout(() => setCopiedDev(false), 2000);
   };
 
   if (loading) {
@@ -129,7 +139,17 @@ export default function ProjectDetailPage() {
                   : "bg-gray-100 text-gray-700 hover:bg-gray-200"
               }`}
             >
-              {copied ? "Lien copie !" : "Copier le lien de review"}
+              {copied ? "Lien copie !" : "Lien client"}
+            </button>
+            <button
+              onClick={copyDevLink}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                copiedDev
+                  ? "bg-green-50 text-green-600 border border-green-200"
+                  : "bg-blue-50 text-blue-700 hover:bg-blue-100"
+              }`}
+            >
+              {copiedDev ? "Lien copie !" : "Lien freelance"}
             </button>
             <Link
               href={`/review/${project.slug}`}

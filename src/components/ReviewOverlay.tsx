@@ -25,8 +25,13 @@ interface ReviewOverlayProps {
   slug: string;
   siteUrl: string;
   projectName: string;
-  mode?: "admin" | "reviewer";
+  mode?: "admin" | "reviewer" | "dev";
 }
+
+// Tall iframe height so the page renders fully without internal scroll.
+// Pins are placed on an overlay of the same height inside a scrollable
+// container, so they scroll together with the page content.
+const IFRAME_HEIGHT = 12000;
 
 export default function ReviewOverlay({
   slug,
@@ -44,6 +49,10 @@ export default function ReviewOverlay({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Dev mode: can view comments & reply, but cannot add new pins
+  const canAddComments = mode !== "dev";
 
   const fetchComments = useCallback(async () => {
     try {
@@ -68,11 +77,23 @@ export default function ReviewOverlay({
     if (!isCommenting || !overlayRef.current) return;
 
     const rect = overlayRef.current.getBoundingClientRect();
-    const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
+    const overlayHeight = IFRAME_HEIGHT;
+    const overlayWidth = overlayRef.current.offsetWidth;
+
+    // Calculate position relative to the full overlay (not just viewport)
+    const scrollTop = scrollContainerRef.current?.scrollTop || 0;
+    const xPercent = ((e.clientX - rect.left) / overlayWidth) * 100;
+    const yPercent = ((e.clientY - rect.top + scrollTop) / overlayHeight) * 100;
 
     setClickPos({ x: xPercent, y: yPercent });
     setActiveCommentId(null);
+  };
+
+  // Forward wheel events to the scroll container when overlay captures them
+  const handleOverlayWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop += e.deltaY;
+    }
   };
 
   const handleSubmitComment = async (data: {
@@ -160,6 +181,17 @@ export default function ReviewOverlay({
   const handleCommentClick = (id: string) => {
     setActiveCommentId(id === activeCommentId ? null : id);
     setSidebarOpen(true);
+
+    // Scroll to the pin position
+    const comment = comments.find((c) => c.id === id);
+    if (comment && scrollContainerRef.current) {
+      const targetY = (comment.yPercent / 100) * IFRAME_HEIGHT;
+      const containerHeight = scrollContainerRef.current.clientHeight;
+      scrollContainerRef.current.scrollTo({
+        top: targetY - containerHeight / 3,
+        behavior: "smooth",
+      });
+    }
   };
 
   return (
@@ -177,6 +209,11 @@ export default function ReviewOverlay({
           <span className="text-sm text-gray-300 truncate max-w-xs">
             {projectName}
           </span>
+          {mode === "dev" && (
+            <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full font-medium">
+              Mode Dev
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -193,23 +230,25 @@ export default function ReviewOverlay({
             </svg>
           </a>
 
-          {/* Comment mode toggle */}
-          <button
-            onClick={() => {
-              setIsCommenting(!isCommenting);
-              setClickPos(null);
-            }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              isCommenting
-                ? "bg-orange-500 text-white shadow-lg shadow-orange-500/30"
-                : "bg-gray-700 text-gray-200 hover:bg-gray-600"
-            }`}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            {isCommenting ? "Mode commentaire actif" : "Ajouter commentaire"}
-          </button>
+          {/* Comment mode toggle - only for reviewer & admin */}
+          {canAddComments && (
+            <button
+              onClick={() => {
+                setIsCommenting(!isCommenting);
+                setClickPos(null);
+              }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                isCommenting
+                  ? "bg-orange-500 text-white shadow-lg shadow-orange-500/30"
+                  : "bg-gray-700 text-gray-200 hover:bg-gray-600"
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              {isCommenting ? "Mode commentaire actif" : "Ajouter commentaire"}
+            </button>
+          )}
 
           {/* Sidebar toggle */}
           <button
@@ -230,73 +269,80 @@ export default function ReviewOverlay({
 
       {/* Main area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Iframe + overlay container */}
-        <div className="flex-1 relative">
-          {/* iframe - loads the real site */}
-          <iframe
-            src={siteUrl}
-            className="w-full h-full border-none"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            title={projectName}
-          />
+        {/* Scrollable container for iframe + overlay */}
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 overflow-auto"
+        >
+          <div className="relative" style={{ width: "100%", height: `${IFRAME_HEIGHT}px` }}>
+            {/* iframe - tall so the full page renders without internal scroll */}
+            <iframe
+              src={siteUrl}
+              className="w-full border-none"
+              style={{ height: `${IFRAME_HEIGHT}px` }}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              title={projectName}
+            />
 
-          {/* Overlay for clicking and pins */}
-          <div
-            ref={overlayRef}
-            className={`absolute inset-0 ${
-              isCommenting ? "cursor-crosshair" : "pointer-events-none"
-            }`}
-            onClick={handleOverlayClick}
-          >
-            {/* Comment pins */}
-            {comments.map((comment, index) => (
-              <CommentPin
-                key={comment.id}
-                number={index + 1}
-                xPercent={comment.xPercent}
-                yPercent={comment.yPercent}
-                resolved={comment.resolved}
-                isActive={activeCommentId === comment.id}
-                onClick={() => handleCommentClick(comment.id)}
-              />
-            ))}
+            {/* Overlay for clicking and pins - same height as iframe */}
+            <div
+              ref={overlayRef}
+              className={`absolute inset-0 ${
+                isCommenting ? "cursor-crosshair" : "pointer-events-none"
+              }`}
+              onClick={handleOverlayClick}
+              onWheel={handleOverlayWheel}
+            >
+              {/* Comment pins */}
+              {comments.map((comment, index) => (
+                <CommentPin
+                  key={comment.id}
+                  number={index + 1}
+                  xPercent={comment.xPercent}
+                  yPercent={comment.yPercent}
+                  resolved={comment.resolved}
+                  isActive={activeCommentId === comment.id}
+                  onClick={() => handleCommentClick(comment.id)}
+                />
+              ))}
 
-            {/* New comment placement */}
-            {clickPos && (
-              <>
-                <div
-                  className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                  style={{ left: `${clickPos.x}%`, top: `${clickPos.y}%` }}
-                />
-                <CommentForm
-                  xPercent={clickPos.x}
-                  yPercent={clickPos.y}
-                  onSubmit={handleSubmitComment}
-                  onCancel={() => setClickPos(null)}
-                  isSubmitting={isSubmitting}
-                />
-              </>
-            )}
+              {/* New comment placement */}
+              {clickPos && (
+                <>
+                  <div
+                    className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
+                    style={{ left: `${clickPos.x}%`, top: `${clickPos.y}%` }}
+                  />
+                  <CommentForm
+                    xPercent={clickPos.x}
+                    yPercent={clickPos.y}
+                    onSubmit={handleSubmitComment}
+                    onCancel={() => setClickPos(null)}
+                    isSubmitting={isSubmitting}
+                  />
+                </>
+              )}
+            </div>
           </div>
 
-          {/* Commenting mode banner */}
+          {/* Commenting mode banner - sticky at bottom */}
           {isCommenting && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-xl z-30 flex items-center gap-2">
+            <div className="sticky bottom-6 left-1/2 -translate-x-1/2 w-fit mx-auto bg-gray-900 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-xl z-30 flex items-center gap-2">
               <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
               Cliquez sur la page pour placer un commentaire
             </div>
           )}
-
-          {/* Loading */}
-          {loading && (
-            <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-30 pointer-events-none">
-              <div className="bg-white rounded-xl shadow-lg px-6 py-4 flex items-center gap-3">
-                <div className="w-5 h-5 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm text-gray-600">Chargement...</span>
-              </div>
-            </div>
-          )}
         </div>
+
+        {/* Loading overlay */}
+        {loading && (
+          <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-30 pointer-events-none">
+            <div className="bg-white rounded-xl shadow-lg px-6 py-4 flex items-center gap-3">
+              <div className="w-5 h-5 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm text-gray-600">Chargement...</span>
+            </div>
+          </div>
+        )}
 
         {/* Sidebar */}
         <CommentSidebar

@@ -26,7 +26,7 @@ interface CommentThreadProps {
   onDelete: (id: string) => void;
   isActive: boolean;
   onClick: () => void;
-  mode: "admin" | "reviewer";
+  mode: "admin" | "reviewer" | "dev";
 }
 
 export default function CommentThread({
