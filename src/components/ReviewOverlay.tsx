@@ -36,6 +36,7 @@ export default function ReviewOverlay({
 }: ReviewOverlayProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [isCommenting, setIsCommenting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | null>(
     null
   );
@@ -45,18 +46,25 @@ export default function ReviewOverlay({
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(true);
   const [screenshotError, setScreenshotError] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
 
-  // Fetch screenshot
+  // Fetch screenshot directly from Microlink (client-side, avoids Vercel timeout)
   useEffect(() => {
     const fetchScreenshot = async () => {
+      setScreenshotLoading(true);
+      setScreenshotError(false);
+      setImageLoaded(false);
       try {
-        const res = await fetch(
-          `/api/screenshot?url=${encodeURIComponent(siteUrl)}`
-        );
+        const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(
+          siteUrl
+        )}&screenshot=true&fullPage=true&meta=false&viewport.width=1280&viewport.height=800`;
+
+        const res = await fetch(microlinkUrl);
         const data = await res.json();
-        if (data.screenshotUrl) {
-          setScreenshotUrl(data.screenshotUrl);
+
+        if (data.status === "success" && data.data?.screenshot?.url) {
+          setScreenshotUrl(data.data.screenshot.url);
         } else {
           setScreenshotError(true);
         }
@@ -95,7 +103,7 @@ export default function ReviewOverlay({
     const overlayWidth = overlayRef.current.offsetWidth;
     const overlayHeight = overlayRef.current.offsetHeight;
 
-    // Position relative to the full image (accounts for scroll automatically)
+    // Position relative to the full image (scroll is already accounted for by getBoundingClientRect)
     const xPercent = ((e.clientX - rect.left) / overlayWidth) * 100;
     const yPercent = ((e.clientY - rect.top) / overlayHeight) * 100;
 
@@ -107,8 +115,9 @@ export default function ReviewOverlay({
     content: string;
     author: string;
   }) => {
-    if (!clickPos) return;
+    if (!clickPos || isSubmitting) return;
 
+    setIsSubmitting(true);
     try {
       const res = await fetch("/api/comments", {
         method: "POST",
@@ -125,10 +134,12 @@ export default function ReviewOverlay({
       if (res.ok) {
         setClickPos(null);
         setIsCommenting(false);
-        fetchComments();
+        await fetchComments();
       }
     } catch {
       // handle error
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -187,24 +198,33 @@ export default function ReviewOverlay({
     setSidebarOpen(true);
   };
 
-  const refreshScreenshot = async () => {
+  const refreshScreenshot = () => {
+    setScreenshotUrl(null);
+    setImageLoaded(false);
     setScreenshotLoading(true);
     setScreenshotError(false);
-    try {
-      const res = await fetch(
-        `/api/screenshot?url=${encodeURIComponent(siteUrl)}&t=${Date.now()}`
-      );
-      const data = await res.json();
-      if (data.screenshotUrl) {
-        setScreenshotUrl(data.screenshotUrl);
-      } else {
+
+    const fetchAgain = async () => {
+      try {
+        const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(
+          siteUrl
+        )}&screenshot=true&fullPage=true&meta=false&viewport.width=1280&viewport.height=800&force=true`;
+
+        const res = await fetch(microlinkUrl);
+        const data = await res.json();
+
+        if (data.status === "success" && data.data?.screenshot?.url) {
+          setScreenshotUrl(data.data.screenshot.url);
+        } else {
+          setScreenshotError(true);
+        }
+      } catch {
         setScreenshotError(true);
+      } finally {
+        setScreenshotLoading(false);
       }
-    } catch {
-      setScreenshotError(true);
-    } finally {
-      setScreenshotLoading(false);
-    }
+    };
+    fetchAgain();
   };
 
   return (
@@ -246,6 +266,19 @@ export default function ReviewOverlay({
               />
             </svg>
           </button>
+
+          {/* Open original site */}
+          <a
+            href={siteUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-2 rounded-lg text-sm transition-colors"
+            title="Ouvrir le site original"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
 
           {/* Comment mode toggle */}
           <button
@@ -306,31 +339,37 @@ export default function ReviewOverlay({
       <div className="flex-1 flex overflow-hidden">
         {/* Screenshot + overlay container (scrollable) */}
         <div
-          className={`flex-1 overflow-auto bg-gray-800 ${
+          className={`flex-1 overflow-auto bg-gray-100 ${
             isCommenting ? "cursor-crosshair" : ""
           }`}
         >
           {screenshotLoading ? (
             <div className="h-full flex items-center justify-center">
               <div className="text-center">
-                <div className="w-10 h-10 border-3 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                <p className="text-gray-400 text-sm">
+                <div className="w-10 h-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                <p className="text-gray-500 text-sm font-medium">
                   Capture du site en cours...
                 </p>
-                <p className="text-gray-500 text-xs mt-1">
+                <p className="text-gray-400 text-xs mt-1">
                   Cela peut prendre quelques secondes
                 </p>
               </div>
             </div>
           ) : screenshotError ? (
             <div className="h-full flex items-center justify-center">
-              <div className="text-center">
-                <p className="text-gray-400 mb-3">
+              <div className="text-center max-w-sm">
+                <svg className="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <p className="text-gray-600 font-medium mb-2">
                   Impossible de capturer le site
+                </p>
+                <p className="text-gray-400 text-sm mb-4">
+                  Le site est peut-etre protege ou temporairement indisponible
                 </p>
                 <button
                   onClick={refreshScreenshot}
-                  className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  className="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
                 >
                   Reessayer
                 </button>
@@ -345,55 +384,73 @@ export default function ReviewOverlay({
                   alt={`Capture de ${projectName}`}
                   className="w-full block"
                   draggable={false}
+                  onLoad={() => setImageLoaded(true)}
+                  onError={() => {
+                    setScreenshotError(true);
+                    setScreenshotUrl(null);
+                  }}
                 />
               )}
 
-              {/* Overlay for pins and click capture */}
-              <div
-                ref={overlayRef}
-                className="absolute inset-0"
-                onClick={handleOverlayClick}
-                style={{
-                  pointerEvents: isCommenting ? "auto" : "none",
-                }}
-              >
-                {/* Comment pins */}
-                {comments.map((comment, index) => (
-                  <CommentPin
-                    key={comment.id}
-                    number={index + 1}
-                    xPercent={comment.xPercent}
-                    yPercent={comment.yPercent}
-                    resolved={comment.resolved}
-                    isActive={activeCommentId === comment.id}
-                    onClick={() => handleCommentClick(comment.id)}
-                  />
-                ))}
+              {/* Image loading spinner */}
+              {screenshotUrl && !imageLoaded && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
+                  <div className="text-center">
+                    <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                    <p className="text-gray-400 text-sm">Chargement de l&apos;image...</p>
+                  </div>
+                </div>
+              )}
 
-                {/* New comment placement */}
-                {clickPos && (
-                  <>
-                    <div
-                      className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                      style={{
-                        left: `${clickPos.x}%`,
-                        top: `${clickPos.y}%`,
-                      }}
+              {/* Overlay for pins and click capture */}
+              {imageLoaded && (
+                <div
+                  ref={overlayRef}
+                  className="absolute inset-0"
+                  onClick={handleOverlayClick}
+                  style={{
+                    pointerEvents: isCommenting ? "auto" : "none",
+                  }}
+                >
+                  {/* Comment pins */}
+                  {comments.map((comment, index) => (
+                    <CommentPin
+                      key={comment.id}
+                      number={index + 1}
+                      xPercent={comment.xPercent}
+                      yPercent={comment.yPercent}
+                      resolved={comment.resolved}
+                      isActive={activeCommentId === comment.id}
+                      onClick={() => handleCommentClick(comment.id)}
                     />
-                    <CommentForm
-                      xPercent={clickPos.x}
-                      yPercent={clickPos.y}
-                      onSubmit={handleSubmitComment}
-                      onCancel={() => setClickPos(null)}
-                    />
-                  </>
-                )}
-              </div>
+                  ))}
+
+                  {/* New comment placement */}
+                  {clickPos && (
+                    <>
+                      <div
+                        className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
+                        style={{
+                          left: `${clickPos.x}%`,
+                          top: `${clickPos.y}%`,
+                        }}
+                      />
+                      <CommentForm
+                        xPercent={clickPos.x}
+                        yPercent={clickPos.y}
+                        onSubmit={handleSubmitComment}
+                        onCancel={() => setClickPos(null)}
+                        isSubmitting={isSubmitting}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
           {/* Commenting mode banner */}
-          {isCommenting && !screenshotLoading && (
+          {isCommenting && imageLoaded && (
             <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-xl z-30 flex items-center gap-2">
               <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
               Cliquez sur la page pour placer un commentaire

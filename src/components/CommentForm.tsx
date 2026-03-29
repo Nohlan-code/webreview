@@ -7,6 +7,7 @@ interface CommentFormProps {
   yPercent: number;
   onSubmit: (data: { content: string; author: string }) => void;
   onCancel: () => void;
+  isSubmitting?: boolean;
 }
 
 export default function CommentForm({
@@ -14,13 +15,14 @@ export default function CommentForm({
   yPercent,
   onSubmit,
   onCancel,
+  isSubmitting = false,
 }: CommentFormProps) {
   const [content, setContent] = useState("");
   const [author, setAuthor] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!content.trim() || !author.trim()) return;
+    if (!content.trim() || !author.trim() || isSubmitting) return;
     onSubmit({ content: content.trim(), author: author.trim() });
   };
 
@@ -46,6 +48,7 @@ export default function CommentForm({
             onChange={(e) => setAuthor(e.target.value)}
             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
             autoFocus
+            disabled={isSubmitting}
           />
         </div>
         <div>
@@ -55,20 +58,29 @@ export default function CommentForm({
             onChange={(e) => setContent(e.target.value)}
             rows={3}
             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
+            disabled={isSubmitting}
           />
         </div>
         <div className="flex gap-2">
           <button
             type="submit"
-            disabled={!content.trim() || !author.trim()}
-            className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-300 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+            disabled={!content.trim() || !author.trim() || isSubmitting}
+            className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-300 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
           >
-            Envoyer
+            {isSubmitting ? (
+              <>
+                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Envoi...
+              </>
+            ) : (
+              "Envoyer"
+            )}
           </button>
           <button
             type="button"
             onClick={onCancel}
-            className="px-3 py-2 text-gray-500 hover:text-gray-700 text-sm"
+            disabled={isSubmitting}
+            className="px-3 py-2 text-gray-500 hover:text-gray-700 text-sm disabled:opacity-50"
           >
             Annuler
           </button>
