@@ -24,13 +24,16 @@ export default function CommentForm({
     onSubmit({ content: content.trim(), author: author.trim() });
   };
 
+  // Position form to the right of pin, or left if too far right
+  const formLeft = xPercent > 70 ? xPercent - 25 : xPercent + 2;
+
   return (
     <div
-      className="absolute z-30 bg-white rounded-xl shadow-2xl border border-gray-200 p-4 w-72"
+      className="absolute z-30 bg-white rounded-xl shadow-2xl border border-gray-200 p-4 w-72 pointer-events-auto"
       style={{
-        left: `${Math.min(xPercent, 75)}%`,
+        left: `${formLeft}%`,
         top: `${yPercent}%`,
-        transform: "translate(16px, -50%)",
+        transform: "translateY(-50%)",
       }}
       onClick={(e) => e.stopPropagation()}
     >
