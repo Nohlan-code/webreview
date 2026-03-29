@@ -3,7 +3,7 @@
 interface CommentPinProps {
   number: number;
   xPercent: number;
-  yPercent: number;
+  yPx: number;
   resolved: boolean;
   isActive: boolean;
   onClick: () => void;
@@ -12,7 +12,7 @@ interface CommentPinProps {
 export default function CommentPin({
   number,
   xPercent,
-  yPercent,
+  yPx,
   resolved,
   isActive,
   onClick,
@@ -30,7 +30,7 @@ export default function CommentPin({
       } ${isActive ? "ring-4 ring-orange-300 scale-125" : ""}`}
       style={{
         left: `${xPercent}%`,
-        top: `${yPercent}%`,
+        top: `${yPx}px`,
       }}
       title={`Commentaire #${number}`}
     >

@@ -4,7 +4,7 @@ import { useState } from "react";
 
 interface CommentFormProps {
   xPercent: number;
-  yPercent: number;
+  yPx: number;
   onSubmit: (data: { content: string; author: string }) => void;
   onCancel: () => void;
   isSubmitting?: boolean;
@@ -12,7 +12,7 @@ interface CommentFormProps {
 
 export default function CommentForm({
   xPercent,
-  yPercent,
+  yPx,
   onSubmit,
   onCancel,
   isSubmitting = false,
@@ -34,7 +34,7 @@ export default function CommentForm({
       className="absolute z-30 bg-white rounded-xl shadow-2xl border border-gray-200 p-4 w-72 pointer-events-auto"
       style={{
         left: `${formLeft}%`,
-        top: `${yPercent}%`,
+        top: `${yPx}px`,
         transform: "translateY(-50%)",
       }}
       onClick={(e) => e.stopPropagation()}

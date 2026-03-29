@@ -139,12 +139,11 @@ export default function ReviewOverlay({
     return () => container.removeEventListener("wheel", handleWheel);
   }, []);
 
-  // Helper: convert stored absolute yPercent to viewport-relative display position
-  const getDisplayY = (absoluteYPercent: number) => {
-    const overlayHeight = overlayRef.current?.clientHeight || 800;
-    const absoluteYPx = (absoluteYPercent / 100) * overlayHeight;
-    const viewportYPx = absoluteYPx - scrollY;
-    return (viewportYPx / overlayHeight) * 100;
+  // Helper: convert stored yPercent (of total page height) to viewport pixel position
+  const getDisplayY = (yPercent: number): number => {
+    const pageHeight = iframeRef.current?.contentDocument?.documentElement.scrollHeight || 800;
+    const absoluteYPx = (yPercent / 100) * pageHeight;
+    return absoluteYPx - scrollY; // returns viewport pixels
   };
 
   const fetchComments = useCallback(async () => {
@@ -171,11 +170,12 @@ export default function ReviewOverlay({
 
     const rect = overlayRef.current.getBoundingClientRect();
     const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    // Store absolute position: viewport click position + direct iframe scroll
+    // Store absolute position as percentage of total page scroll height
     const viewportYPx = e.clientY - rect.top;
     const iframeScrollY = iframeRef.current?.contentWindow?.scrollY || 0;
+    const pageHeight = iframeRef.current?.contentDocument?.documentElement.scrollHeight || rect.height;
     const absoluteYPx = viewportYPx + iframeScrollY;
-    const yPercent = (absoluteYPx / rect.height) * 100;
+    const yPercent = (absoluteYPx / pageHeight) * 100;
 
     setClickPos({ x: xPercent, y: yPercent });
     setActiveCommentId(null);
@@ -372,9 +372,9 @@ export default function ReviewOverlay({
       </div>
 
       {/* Main area */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Iframe + overlay container */}
-        <div className="flex-1 relative" ref={containerRef}>
+      <div className="flex-1 relative overflow-hidden">
+        {/* Iframe + overlay container - takes full width */}
+        <div className="w-full h-full relative" ref={containerRef}>
           {/* iframe - loads proxy HTML via srcdoc (same-origin, no X-Frame-Options issues) */}
           <iframe
             ref={iframeRef}
@@ -395,14 +395,15 @@ export default function ReviewOverlay({
             {/* Comment pins - positioned relative to tracked scroll */}
             {comments.map((comment, index) => {
               const displayY = getDisplayY(comment.yPercent);
-              // Hide pins that are off-screen
-              if (displayY < -5 || displayY > 105) return null;
+              const overlayHeight = overlayRef.current?.clientHeight || 800;
+              // Hide pins that are off-screen (pixel-based check)
+              if (displayY < -50 || displayY > overlayHeight + 50) return null;
               return (
                 <CommentPin
                   key={comment.id}
                   number={index + 1}
                   xPercent={comment.xPercent}
-                  yPercent={displayY}
+                  yPx={displayY}
                   resolved={comment.resolved}
                   isActive={activeCommentId === comment.id}
                   onClick={() => handleCommentClick(comment.id)}
@@ -420,12 +421,12 @@ export default function ReviewOverlay({
                       className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
                       style={{
                         left: `${clickPos.x}%`,
-                        top: `${displayY}%`,
+                        top: `${displayY}px`,
                       }}
                     />
                     <CommentForm
                       xPercent={clickPos.x}
-                      yPercent={displayY}
+                      yPx={displayY}
                       onSubmit={handleSubmitComment}
                       onCancel={() => setClickPos(null)}
                       isSubmitting={isSubmitting}
@@ -516,18 +517,20 @@ export default function ReviewOverlay({
           )}
         </div>
 
-        {/* Sidebar */}
-        <CommentSidebar
-          comments={comments}
-          activeCommentId={activeCommentId}
-          onCommentClick={handleCommentClick}
-          onResolve={handleResolve}
-          onReply={handleReply}
-          onDelete={handleDelete}
-          isOpen={sidebarOpen}
-          onToggle={() => setSidebarOpen(!sidebarOpen)}
-          mode={mode}
-        />
+        {/* Sidebar - overlays on top of iframe, does not push layout */}
+        <div className="absolute right-0 top-0 h-full z-40">
+          <CommentSidebar
+            comments={comments}
+            activeCommentId={activeCommentId}
+            onCommentClick={handleCommentClick}
+            onResolve={handleResolve}
+            onReply={handleReply}
+            onDelete={handleDelete}
+            isOpen={sidebarOpen}
+            onToggle={() => setSidebarOpen(!sidebarOpen)}
+            mode={mode}
+          />
+        </div>
       </div>
     </div>
   );
