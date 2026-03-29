@@ -38,6 +38,7 @@ export default function ProjectDetailPage() {
   const [filter, setFilter] = useState<"all" | "open" | "resolved">("all");
   const [copied, setCopied] = useState(false);
   const [copiedDev, setCopiedDev] = useState(false);
+  const [copiedSnippet, setCopiedSnippet] = useState(false);
 
   const fetchProject = useCallback(async () => {
     try {
@@ -87,6 +88,13 @@ export default function ProjectDetailPage() {
     );
     setCopiedDev(true);
     setTimeout(() => setCopiedDev(false), 2000);
+  };
+
+  const copySnippet = async () => {
+    const snippet = `<script src="${window.location.origin}/api/snippet" defer></script>`;
+    await navigator.clipboard.writeText(snippet);
+    setCopiedSnippet(true);
+    setTimeout(() => setCopiedSnippet(false), 2000);
   };
 
   if (loading) {
@@ -191,6 +199,31 @@ export default function ProjectDetailPage() {
                 <div className="text-xs text-green-500">Resolus</div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Snippet installation */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <h2 className="font-semibold text-lg mb-1">Snippet de tracking</h2>
+              <p className="text-sm text-gray-500 mb-3">
+                Ajoutez ce script sur votre site pour que les pins restent fixes lors du scroll.
+              </p>
+              <code className="block bg-gray-100 text-sm px-4 py-2.5 rounded-lg text-gray-700 font-mono break-all">
+                {`<script src="${typeof window !== 'undefined' ? window.location.origin : ''}/api/snippet" defer></script>`}
+              </code>
+            </div>
+            <button
+              onClick={copySnippet}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex-shrink-0 ml-4 ${
+                copiedSnippet
+                  ? "bg-green-50 text-green-600 border border-green-200"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+            >
+              {copiedSnippet ? "Copie !" : "Copier"}
+            </button>
           </div>
         </div>
 

@@ -79,35 +79,25 @@ export default function ReviewOverlay({
     return () => clearInterval(interval);
   }, [fetchComments]);
 
-  // Track iframe scroll via wheel events on the container
+  // Track iframe scroll via postMessage from injected snippet on target site
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const handleWheel = (e: WheelEvent) => {
-      // Don't track when in commenting mode (overlay blocks scroll)
-      if (isCommenting) return;
-
-      let delta = e.deltaY;
-      // Normalize deltaMode: 0=pixels, 1=lines (~40px), 2=pages
-      if (e.deltaMode === 1) delta *= 40;
-      if (e.deltaMode === 2) delta *= window.innerHeight;
-
-      scrollOffsetRef.current = Math.max(0, scrollOffsetRef.current + delta);
-
-      // Throttled re-render for pin positions
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = requestAnimationFrame(() => {
-        setScrollY(scrollOffsetRef.current);
-      });
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === "webreview-scroll") {
+        scrollOffsetRef.current = e.data.scrollY || 0;
+        // Throttled re-render for pin positions
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = requestAnimationFrame(() => {
+          setScrollY(scrollOffsetRef.current);
+        });
+      }
     };
 
-    container.addEventListener("wheel", handleWheel, { passive: true });
+    window.addEventListener("message", handleMessage);
     return () => {
-      container.removeEventListener("wheel", handleWheel);
+      window.removeEventListener("message", handleMessage);
       cancelAnimationFrame(rafRef.current);
     };
-  }, [isCommenting]);
+  }, []);
 
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isCommenting || !overlayRef.current) return;
