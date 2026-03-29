@@ -43,39 +43,7 @@ export default function ReviewOverlay({
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
-  const [screenshotLoading, setScreenshotLoading] = useState(true);
-  const [screenshotError, setScreenshotError] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
-
-  // Fetch screenshot directly from Microlink (client-side, avoids Vercel timeout)
-  useEffect(() => {
-    const fetchScreenshot = async () => {
-      setScreenshotLoading(true);
-      setScreenshotError(false);
-      setImageLoaded(false);
-      try {
-        const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(
-          siteUrl
-        )}&screenshot=true&meta=false&viewport.width=1280&viewport.height=6000&waitForTimeout=3000`;
-
-        const res = await fetch(microlinkUrl);
-        const data = await res.json();
-
-        if (data.status === "success" && data.data?.screenshot?.url) {
-          setScreenshotUrl(data.data.screenshot.url);
-        } else {
-          setScreenshotError(true);
-        }
-      } catch {
-        setScreenshotError(true);
-      } finally {
-        setScreenshotLoading(false);
-      }
-    };
-    fetchScreenshot();
-  }, [siteUrl]);
 
   const fetchComments = useCallback(async () => {
     try {
@@ -100,12 +68,8 @@ export default function ReviewOverlay({
     if (!isCommenting || !overlayRef.current) return;
 
     const rect = overlayRef.current.getBoundingClientRect();
-    const overlayWidth = overlayRef.current.offsetWidth;
-    const overlayHeight = overlayRef.current.offsetHeight;
-
-    // Position relative to the full image (scroll is already accounted for by getBoundingClientRect)
-    const xPercent = ((e.clientX - rect.left) / overlayWidth) * 100;
-    const yPercent = ((e.clientY - rect.top) / overlayHeight) * 100;
+    const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
+    const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
 
     setClickPos({ x: xPercent, y: yPercent });
     setActiveCommentId(null);
@@ -198,35 +162,6 @@ export default function ReviewOverlay({
     setSidebarOpen(true);
   };
 
-  const refreshScreenshot = () => {
-    setScreenshotUrl(null);
-    setImageLoaded(false);
-    setScreenshotLoading(true);
-    setScreenshotError(false);
-
-    const fetchAgain = async () => {
-      try {
-        const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(
-          siteUrl
-        )}&screenshot=true&meta=false&viewport.width=1280&viewport.height=6000&waitForTimeout=3000&force=true`;
-
-        const res = await fetch(microlinkUrl);
-        const data = await res.json();
-
-        if (data.status === "success" && data.data?.screenshot?.url) {
-          setScreenshotUrl(data.data.screenshot.url);
-        } else {
-          setScreenshotError(true);
-        }
-      } catch {
-        setScreenshotError(true);
-      } finally {
-        setScreenshotLoading(false);
-      }
-    };
-    fetchAgain();
-  };
-
   return (
     <div
       className="h-screen flex flex-col"
@@ -245,28 +180,6 @@ export default function ReviewOverlay({
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Refresh screenshot */}
-          <button
-            onClick={refreshScreenshot}
-            disabled={screenshotLoading}
-            className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-200 px-3 py-2 rounded-lg text-sm transition-colors"
-            title="Rafraichir la capture"
-          >
-            <svg
-              className={`w-4 h-4 ${screenshotLoading ? "animate-spin" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-          </button>
-
           {/* Open original site */}
           <a
             href={siteUrl}
@@ -292,18 +205,8 @@ export default function ReviewOverlay({
                 : "bg-gray-700 text-gray-200 hover:bg-gray-600"
             }`}
           >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 4v16m8-8H4"
-              />
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
             {isCommenting ? "Mode commentaire actif" : "Ajouter commentaire"}
           </button>
@@ -313,18 +216,8 @@ export default function ReviewOverlay({
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="relative bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-2 rounded-lg text-sm transition-colors"
           >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-              />
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
             {comments.filter((c) => !c.resolved).length > 0 && (
               <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold">
@@ -337,123 +230,70 @@ export default function ReviewOverlay({
 
       {/* Main area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Screenshot + overlay container (scrollable) */}
-        <div
-          className={`flex-1 overflow-auto bg-gray-100 ${
-            isCommenting ? "cursor-crosshair" : ""
-          }`}
-        >
-          {screenshotLoading ? (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center">
-                <div className="w-10 h-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                <p className="text-gray-500 text-sm font-medium">
-                  Capture du site en cours...
-                </p>
-                <p className="text-gray-400 text-xs mt-1">
-                  Cela peut prendre quelques secondes
-                </p>
-              </div>
-            </div>
-          ) : screenshotError ? (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center max-w-sm">
-                <svg className="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <p className="text-gray-600 font-medium mb-2">
-                  Impossible de capturer le site
-                </p>
-                <p className="text-gray-400 text-sm mb-4">
-                  Le site est peut-etre protege ou temporairement indisponible
-                </p>
-                <button
-                  onClick={refreshScreenshot}
-                  className="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-                >
-                  Reessayer
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="relative inline-block min-w-full">
-              {/* Screenshot image */}
-              {screenshotUrl && (
-                <img
-                  src={screenshotUrl}
-                  alt={`Capture de ${projectName}`}
-                  className="w-full block"
-                  draggable={false}
-                  onLoad={() => setImageLoaded(true)}
-                  onError={() => {
-                    setScreenshotError(true);
-                    setScreenshotUrl(null);
-                  }}
-                />
-              )}
+        {/* Iframe + overlay container */}
+        <div className="flex-1 relative">
+          {/* iframe - loads the real site */}
+          <iframe
+            src={siteUrl}
+            className="w-full h-full border-none"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            title={projectName}
+          />
 
-              {/* Image loading spinner */}
-              {screenshotUrl && !imageLoaded && (
-                <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
-                  <div className="text-center">
-                    <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-                    <p className="text-gray-400 text-sm">Chargement de l&apos;image...</p>
-                  </div>
-                </div>
-              )}
+          {/* Overlay for clicking and pins */}
+          <div
+            ref={overlayRef}
+            className={`absolute inset-0 ${
+              isCommenting ? "cursor-crosshair" : "pointer-events-none"
+            }`}
+            onClick={handleOverlayClick}
+          >
+            {/* Comment pins */}
+            {comments.map((comment, index) => (
+              <CommentPin
+                key={comment.id}
+                number={index + 1}
+                xPercent={comment.xPercent}
+                yPercent={comment.yPercent}
+                resolved={comment.resolved}
+                isActive={activeCommentId === comment.id}
+                onClick={() => handleCommentClick(comment.id)}
+              />
+            ))}
 
-              {/* Overlay for pins and click capture */}
-              {imageLoaded && (
+            {/* New comment placement */}
+            {clickPos && (
+              <>
                 <div
-                  ref={overlayRef}
-                  className="absolute inset-0"
-                  onClick={handleOverlayClick}
-                  style={{
-                    pointerEvents: isCommenting ? "auto" : "none",
-                  }}
-                >
-                  {/* Comment pins */}
-                  {comments.map((comment, index) => (
-                    <CommentPin
-                      key={comment.id}
-                      number={index + 1}
-                      xPercent={comment.xPercent}
-                      yPercent={comment.yPercent}
-                      resolved={comment.resolved}
-                      isActive={activeCommentId === comment.id}
-                      onClick={() => handleCommentClick(comment.id)}
-                    />
-                  ))}
+                  className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
+                  style={{ left: `${clickPos.x}%`, top: `${clickPos.y}%` }}
+                />
+                <CommentForm
+                  xPercent={clickPos.x}
+                  yPercent={clickPos.y}
+                  onSubmit={handleSubmitComment}
+                  onCancel={() => setClickPos(null)}
+                  isSubmitting={isSubmitting}
+                />
+              </>
+            )}
+          </div>
 
-                  {/* New comment placement */}
-                  {clickPos && (
-                    <>
-                      <div
-                        className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                        style={{
-                          left: `${clickPos.x}%`,
-                          top: `${clickPos.y}%`,
-                        }}
-                      />
-                      <CommentForm
-                        xPercent={clickPos.x}
-                        yPercent={clickPos.y}
-                        onSubmit={handleSubmitComment}
-                        onCancel={() => setClickPos(null)}
-                        isSubmitting={isSubmitting}
-                      />
-                    </>
-                  )}
-                </div>
-              )}
+          {/* Commenting mode banner */}
+          {isCommenting && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-xl z-30 flex items-center gap-2">
+              <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+              Cliquez sur la page pour placer un commentaire
             </div>
           )}
 
-          {/* Commenting mode banner */}
-          {isCommenting && imageLoaded && (
-            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-xl z-30 flex items-center gap-2">
-              <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
-              Cliquez sur la page pour placer un commentaire
+          {/* Loading */}
+          {loading && (
+            <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-30 pointer-events-none">
+              <div className="bg-white rounded-xl shadow-lg px-6 py-4 flex items-center gap-3">
+                <div className="w-5 h-5 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-gray-600">Chargement...</span>
+              </div>
             </div>
           )}
         </div>
