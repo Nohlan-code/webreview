@@ -76,7 +76,21 @@ export async function GET(request: NextRequest) {
       `$1${origin}/`
     );
 
-    // 5. Inject our scroll tracking script (runs in the static page)
+    // 5. Fix styles for review mode
+    //    - Force instant scroll (no smooth scrolling that causes lag)
+    //    - Fix Next.js Image component (shows broken without JS)
+    const reviewStyles = `<style data-webreview="true">
+      html { scroll-behavior: auto !important; }
+      img[loading="lazy"] { loading: eager; }
+      img { opacity: 1 !important; }
+    </style>`;
+    if (html.match(/<head[^>]*>/i)) {
+      html = html.replace(/<head[^>]*>/i, `$&${reviewStyles}`);
+    } else {
+      html = reviewStyles + html;
+    }
+
+    // 6. Inject our scroll tracking script (runs in the static page)
     const trackingScript = `
 <script data-webreview="true">
 (function(){
