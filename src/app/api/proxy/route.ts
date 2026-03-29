@@ -96,6 +96,15 @@ export async function GET(request: NextRequest) {
 (function(){
   if(window.self===window.top)return;
 
+  // --- Report current page path to parent ---
+  try{
+    window.parent.postMessage({
+      type:"webreview-page",
+      pagePath:${JSON.stringify(parsedTarget.pathname || "/")},
+      url:${JSON.stringify(targetUrl)}
+    },"*");
+  }catch(e){}
+
   // --- Scroll tracking ---
   var lastY=-1;
   (function loop(){

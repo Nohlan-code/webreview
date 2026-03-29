@@ -13,6 +13,7 @@ interface Comment {
   createdAt: string;
   xPercent: number;
   yPercent: number;
+  pagePath: string;
   replies: {
     id: string;
     content: string;
@@ -43,6 +44,7 @@ export default function ReviewOverlay({
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [currentPagePath, setCurrentPagePath] = useState("/");
 
   // New srcdoc-related state
   const [proxyHtml, setProxyHtml] = useState<string | null>(null);
@@ -59,6 +61,11 @@ export default function ReviewOverlay({
 
   // Dev mode: can view comments & reply, but cannot add new pins
   const canAddComments = mode !== "dev";
+
+  // Filter comments for the current page only
+  const pageComments = comments.filter(
+    (c) => c.pagePath === currentPagePath
+  );
 
   // Fetch proxy HTML on mount (srcdoc approach)
   useEffect(() => {
@@ -83,6 +90,21 @@ export default function ReviewOverlay({
     loadSite();
   }, [siteUrl]);
 
+  // Listen for page change messages from the iframe
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === "webreview-page") {
+        const newPath = e.data.pagePath || "/";
+        setCurrentPagePath(newPath);
+        // Reset click position when page changes
+        setClickPos(null);
+        setActiveCommentId(null);
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
+
   // Direct scroll tracking via requestAnimationFrame
   // Updates CSS custom property directly - NO React re-renders during scroll
   useEffect(() => {
@@ -99,7 +121,7 @@ export default function ReviewOverlay({
           if (ph > 0) pageHeightRef.current = ph;
           // Update CSS custom property directly (no React re-render!)
           if (overlayRef.current) {
-            overlayRef.current.style.setProperty('--wr-scroll', String(sy));
+            overlayRef.current.style.setProperty("--wr-scroll", String(sy));
           }
         }
       } catch {
@@ -110,6 +132,8 @@ export default function ReviewOverlay({
 
     const iframe = iframeRef.current;
     const startTracking = () => {
+      // Cancel any previous tracking loop before starting new one
+      cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(trackScroll);
     };
 
@@ -134,7 +158,6 @@ export default function ReviewOverlay({
   }, [pageHeight]);
 
   // Forward wheel events from the overlay/container to the iframe content
-  // The overlay (pointer-events-none) doesn't forward wheel events to the iframe automatically
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -203,7 +226,7 @@ export default function ReviewOverlay({
           slug,
           xPercent: clickPos.x,
           yPercent,
-          pagePath: "/",
+          pagePath: currentPagePath,
         }),
       });
 
@@ -251,7 +274,7 @@ export default function ReviewOverlay({
           xPercent: parent.xPercent,
           yPercent: parent.yPercent,
           parentId,
-          pagePath: "/",
+          pagePath: parent.pagePath,
         }),
       });
       fetchComments();
@@ -275,10 +298,7 @@ export default function ReviewOverlay({
   };
 
   return (
-    <div
-      className="h-screen flex flex-col"
-      style={{ "--sidebar-width": "380px" } as React.CSSProperties}
-    >
+    <div className="h-screen flex flex-col">
       {/* Top bar */}
       <div className="h-14 bg-gray-900 flex items-center justify-between px-4 flex-shrink-0 z-50">
         <div className="flex items-center gap-3">
@@ -289,6 +309,11 @@ export default function ReviewOverlay({
           <span className="text-sm text-gray-300 truncate max-w-xs">
             {projectName}
           </span>
+          {currentPagePath !== "/" && (
+            <span className="text-xs bg-gray-700 text-gray-300 px-2 py-0.5 rounded-full font-mono">
+              {currentPagePath}
+            </span>
+          )}
           {mode === "dev" && (
             <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full font-medium">
               Mode Dev
@@ -368,19 +393,19 @@ export default function ReviewOverlay({
                 d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
               />
             </svg>
-            {comments.filter((c) => !c.resolved).length > 0 && (
+            {pageComments.filter((c) => !c.resolved).length > 0 && (
               <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold">
-                {comments.filter((c) => !c.resolved).length}
+                {pageComments.filter((c) => !c.resolved).length}
               </span>
             )}
           </button>
         </div>
       </div>
 
-      {/* Main area - flex layout: iframe + sidebar side by side */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Iframe + overlay container */}
-        <div className="flex-1 relative" ref={containerRef}>
+      {/* Main area - iframe takes FULL width, sidebar overlays */}
+      <div className="flex-1 relative overflow-hidden">
+        {/* Iframe + overlay container - FULL SIZE */}
+        <div className="absolute inset-0" ref={containerRef}>
           {/* iframe - loads proxy HTML via srcdoc (same-origin, no X-Frame-Options issues) */}
           <iframe
             ref={iframeRef}
@@ -397,20 +422,22 @@ export default function ReviewOverlay({
               isCommenting ? "cursor-crosshair" : "pointer-events-none"
             }`}
             onClick={handleOverlayClick}
-            style={{ '--wr-scroll': '0' } as React.CSSProperties}
+            style={{ "--wr-scroll": "0" } as React.CSSProperties}
           >
             {/* Pins container - CSS transform handles scroll */}
             <div
               className="absolute inset-x-0 top-0 pointer-events-none"
               style={{
                 height: `${pageHeight}px`,
-                transform: 'translateY(calc(-1px * var(--wr-scroll, 0)))',
-                willChange: 'transform',
+                transform:
+                  "translateY(calc(-1px * var(--wr-scroll, 0)))",
+                willChange: "transform",
               }}
             >
-              {/* Each pin at its absolute page position */}
-              {comments.map((comment, index) => {
-                const absoluteYPx = (comment.yPercent / 100) * pageHeight;
+              {/* Each pin at its absolute page position - ONLY for current page */}
+              {pageComments.map((comment, index) => {
+                const absoluteYPx =
+                  (comment.yPercent / 100) * pageHeight;
                 return (
                   <CommentPin
                     key={comment.id}
@@ -429,7 +456,10 @@ export default function ReviewOverlay({
                 <>
                   <div
                     className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                    style={{ left: `${clickPos.x}%`, top: `${clickPos.y}px` }}
+                    style={{
+                      left: `${clickPos.x}%`,
+                      top: `${clickPos.y}px`,
+                    }}
                   />
                   <CommentForm
                     xPercent={clickPos.x}
@@ -524,18 +554,27 @@ export default function ReviewOverlay({
           )}
         </div>
 
-        {/* Sidebar - sits next to iframe in flex layout */}
-        <CommentSidebar
-          comments={comments}
-          activeCommentId={activeCommentId}
-          onCommentClick={handleCommentClick}
-          onResolve={handleResolve}
-          onReply={handleReply}
-          onDelete={handleDelete}
-          isOpen={sidebarOpen}
-          onToggle={() => setSidebarOpen(!sidebarOpen)}
-          mode={mode}
-        />
+        {/* Sidebar - absolute overlay on right, OUTSIDE containerRef so wheel events don't interfere */}
+        <div
+          className={`absolute right-0 top-0 bottom-0 z-40 transition-transform duration-300 ${
+            sidebarOpen ? "translate-x-0" : "translate-x-full"
+          }`}
+          style={{ width: "380px" }}
+        >
+          <div className="h-full shadow-2xl">
+            <CommentSidebar
+              comments={pageComments}
+              activeCommentId={activeCommentId}
+              onCommentClick={handleCommentClick}
+              onResolve={handleResolve}
+              onReply={handleReply}
+              onDelete={handleDelete}
+              isOpen={sidebarOpen}
+              onToggle={() => setSidebarOpen(!sidebarOpen)}
+              mode={mode}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
