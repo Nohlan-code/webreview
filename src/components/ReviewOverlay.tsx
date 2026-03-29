@@ -53,7 +53,8 @@ export default function ReviewOverlay({
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const scrollOffsetRef = useRef(0);
-  const [scrollY, setScrollY] = useState(0);
+  const pageHeightRef = useRef(800);
+  const [pageHeight, setPageHeight] = useState(800);
   const rafRef = useRef<number>(0);
 
   // Dev mode: can view comments & reply, but cannot add new pins
@@ -83,18 +84,22 @@ export default function ReviewOverlay({
   }, [siteUrl]);
 
   // Direct scroll tracking via requestAnimationFrame
-  // Since srcdoc iframe is same-origin, we can read contentWindow.scrollY directly
+  // Updates CSS custom property directly - NO React re-renders during scroll
   useEffect(() => {
     if (!proxyHtml) return;
 
     const trackScroll = () => {
       try {
         const iframe = iframeRef.current;
-        if (iframe?.contentWindow) {
+        if (iframe?.contentWindow && iframe?.contentDocument) {
           const sy = iframe.contentWindow.scrollY || 0;
-          if (sy !== scrollOffsetRef.current) {
-            scrollOffsetRef.current = sy;
-            setScrollY(sy);
+          scrollOffsetRef.current = sy;
+          // Update page height
+          const ph = iframe.contentDocument.documentElement.scrollHeight;
+          if (ph > 0) pageHeightRef.current = ph;
+          // Update CSS custom property directly (no React re-render!)
+          if (overlayRef.current) {
+            overlayRef.current.style.setProperty('--wr-scroll', String(sy));
           }
         }
       } catch {
@@ -118,6 +123,16 @@ export default function ReviewOverlay({
     };
   }, [proxyHtml]);
 
+  // Sync pageHeightRef to state periodically (for pin rendering)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (pageHeightRef.current !== pageHeight) {
+        setPageHeight(pageHeightRef.current);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [pageHeight]);
+
   // Forward wheel events from the overlay/container to the iframe content
   // The overlay (pointer-events-none) doesn't forward wheel events to the iframe automatically
   useEffect(() => {
@@ -138,13 +153,6 @@ export default function ReviewOverlay({
     container.addEventListener("wheel", handleWheel, { passive: false });
     return () => container.removeEventListener("wheel", handleWheel);
   }, []);
-
-  // Helper: convert stored yPercent (of total page height) to viewport pixel position
-  const getDisplayY = (yPercent: number): number => {
-    const pageHeight = iframeRef.current?.contentDocument?.documentElement.scrollHeight || 800;
-    const absoluteYPx = (yPercent / 100) * pageHeight;
-    return absoluteYPx - scrollY; // returns viewport pixels
-  };
 
   const fetchComments = useCallback(async () => {
     try {
@@ -170,14 +178,10 @@ export default function ReviewOverlay({
 
     const rect = overlayRef.current.getBoundingClientRect();
     const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    // Store absolute position as percentage of total page scroll height
     const viewportYPx = e.clientY - rect.top;
-    const iframeScrollY = iframeRef.current?.contentWindow?.scrollY || 0;
-    const pageHeight = iframeRef.current?.contentDocument?.documentElement.scrollHeight || rect.height;
-    const absoluteYPx = viewportYPx + iframeScrollY;
-    const yPercent = (absoluteYPx / pageHeight) * 100;
-
-    setClickPos({ x: xPercent, y: yPercent });
+    const absoluteYPx = viewportYPx + scrollOffsetRef.current;
+    // Store absolute pixels for display, convert to percent on submit
+    setClickPos({ x: xPercent, y: absoluteYPx });
     setActiveCommentId(null);
   };
 
@@ -189,6 +193,8 @@ export default function ReviewOverlay({
 
     setIsSubmitting(true);
     try {
+      const pageH = pageHeightRef.current;
+      const yPercent = (clickPos.y / pageH) * 100;
       const res = await fetch("/api/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -196,7 +202,7 @@ export default function ReviewOverlay({
           ...data,
           slug,
           xPercent: clickPos.x,
-          yPercent: clickPos.y,
+          yPercent,
           pagePath: "/",
         }),
       });
@@ -371,10 +377,10 @@ export default function ReviewOverlay({
         </div>
       </div>
 
-      {/* Main area */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* Iframe + overlay container - takes full width */}
-        <div className="w-full h-full relative" ref={containerRef}>
+      {/* Main area - flex layout: iframe + sidebar side by side */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Iframe + overlay container */}
+        <div className="flex-1 relative" ref={containerRef}>
           {/* iframe - loads proxy HTML via srcdoc (same-origin, no X-Frame-Options issues) */}
           <iframe
             ref={iframeRef}
@@ -387,53 +393,54 @@ export default function ReviewOverlay({
           {/* Overlay for clicking and pins */}
           <div
             ref={overlayRef}
-            className={`absolute inset-0 ${
+            className={`absolute inset-0 overflow-hidden ${
               isCommenting ? "cursor-crosshair" : "pointer-events-none"
             }`}
             onClick={handleOverlayClick}
+            style={{ '--wr-scroll': '0' } as React.CSSProperties}
           >
-            {/* Comment pins - positioned relative to tracked scroll */}
-            {comments.map((comment, index) => {
-              const displayY = getDisplayY(comment.yPercent);
-              const overlayHeight = overlayRef.current?.clientHeight || 800;
-              // Hide pins that are off-screen (pixel-based check)
-              if (displayY < -50 || displayY > overlayHeight + 50) return null;
-              return (
-                <CommentPin
-                  key={comment.id}
-                  number={index + 1}
-                  xPercent={comment.xPercent}
-                  yPx={displayY}
-                  resolved={comment.resolved}
-                  isActive={activeCommentId === comment.id}
-                  onClick={() => handleCommentClick(comment.id)}
-                />
-              );
-            })}
-
-            {/* New comment placement */}
-            {clickPos &&
-              (() => {
-                const displayY = getDisplayY(clickPos.y);
+            {/* Pins container - CSS transform handles scroll */}
+            <div
+              className="absolute inset-x-0 top-0 pointer-events-none"
+              style={{
+                height: `${pageHeight}px`,
+                transform: 'translateY(calc(-1px * var(--wr-scroll, 0)))',
+                willChange: 'transform',
+              }}
+            >
+              {/* Each pin at its absolute page position */}
+              {comments.map((comment, index) => {
+                const absoluteYPx = (comment.yPercent / 100) * pageHeight;
                 return (
-                  <>
-                    <div
-                      className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                      style={{
-                        left: `${clickPos.x}%`,
-                        top: `${displayY}px`,
-                      }}
-                    />
-                    <CommentForm
-                      xPercent={clickPos.x}
-                      yPx={displayY}
-                      onSubmit={handleSubmitComment}
-                      onCancel={() => setClickPos(null)}
-                      isSubmitting={isSubmitting}
-                    />
-                  </>
+                  <CommentPin
+                    key={comment.id}
+                    number={index + 1}
+                    xPercent={comment.xPercent}
+                    yPx={absoluteYPx}
+                    resolved={comment.resolved}
+                    isActive={activeCommentId === comment.id}
+                    onClick={() => handleCommentClick(comment.id)}
+                  />
                 );
-              })()}
+              })}
+
+              {/* New comment placement */}
+              {clickPos && (
+                <>
+                  <div
+                    className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
+                    style={{ left: `${clickPos.x}%`, top: `${clickPos.y}px` }}
+                  />
+                  <CommentForm
+                    xPercent={clickPos.x}
+                    yPx={clickPos.y}
+                    onSubmit={handleSubmitComment}
+                    onCancel={() => setClickPos(null)}
+                    isSubmitting={isSubmitting}
+                  />
+                </>
+              )}
+            </div>
           </div>
 
           {/* Commenting mode banner */}
@@ -517,20 +524,18 @@ export default function ReviewOverlay({
           )}
         </div>
 
-        {/* Sidebar - overlays on top of iframe, does not push layout */}
-        <div className="absolute right-0 top-0 h-full z-40">
-          <CommentSidebar
-            comments={comments}
-            activeCommentId={activeCommentId}
-            onCommentClick={handleCommentClick}
-            onResolve={handleResolve}
-            onReply={handleReply}
-            onDelete={handleDelete}
-            isOpen={sidebarOpen}
-            onToggle={() => setSidebarOpen(!sidebarOpen)}
-            mode={mode}
-          />
-        </div>
+        {/* Sidebar - sits next to iframe in flex layout */}
+        <CommentSidebar
+          comments={comments}
+          activeCommentId={activeCommentId}
+          onCommentClick={handleCommentClick}
+          onResolve={handleResolve}
+          onReply={handleReply}
+          onDelete={handleDelete}
+          isOpen={sidebarOpen}
+          onToggle={() => setSidebarOpen(!sidebarOpen)}
+          mode={mode}
+        />
       </div>
     </div>
   );
