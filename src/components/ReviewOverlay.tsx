@@ -118,6 +118,27 @@ export default function ReviewOverlay({
     };
   }, [proxyHtml]);
 
+  // Forward wheel events from the overlay/container to the iframe content
+  // The overlay (pointer-events-none) doesn't forward wheel events to the iframe automatically
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      const iframe = iframeRef.current;
+      if (!iframe?.contentWindow) return;
+      e.preventDefault();
+      iframe.contentWindow.scrollBy({
+        top: e.deltaY,
+        left: e.deltaX,
+        behavior: "instant",
+      });
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, []);
+
   // Helper: convert stored absolute yPercent to viewport-relative display position
   const getDisplayY = (absoluteYPercent: number) => {
     const overlayHeight = overlayRef.current?.clientHeight || 800;
