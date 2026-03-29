@@ -42,6 +42,36 @@ export default function ReviewOverlay({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Scroll tracking from iframe postMessage
+  const [iframeScroll, setIframeScroll] = useState({
+    scrollY: 0,
+    scrollX: 0,
+    viewportHeight: 1,
+    viewportWidth: 1,
+    pageHeight: 1,
+  });
+
+  // Proxy URL for iframe (same-origin, allows scroll tracking)
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(siteUrl)}`;
+
+  // Listen for scroll messages from the proxied iframe
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === "webreview-scroll") {
+        setIframeScroll({
+          scrollY: e.data.scrollY || 0,
+          scrollX: e.data.scrollX || 0,
+          viewportHeight: e.data.viewportHeight || 1,
+          viewportWidth: e.data.viewportWidth || 1,
+          pageHeight: e.data.pageHeight || 1,
+        });
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
 
   const fetchComments = useCallback(async () => {
     try {
@@ -67,11 +97,35 @@ export default function ReviewOverlay({
     if (!isCommenting || !overlayRef.current) return;
 
     const rect = overlayRef.current.getBoundingClientRect();
-    const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
+    const xViewport = ((e.clientX - rect.left) / rect.width) * 100;
+    const yViewport = ((e.clientY - rect.top) / rect.height) * 100;
 
-    setClickPos({ x: xPercent, y: yPercent });
+    // Convert viewport-relative position to absolute page position
+    // yAbsolute = viewport% + (scrollY / viewportHeight) * 100
+    const yAbsolute =
+      yViewport +
+      (iframeScroll.scrollY / iframeScroll.viewportHeight) * 100;
+    const xAbsolute =
+      xViewport +
+      (iframeScroll.scrollX / iframeScroll.viewportWidth) * 100;
+
+    setClickPos({ x: xAbsolute, y: yAbsolute });
     setActiveCommentId(null);
+  };
+
+  // Convert absolute page position to current viewport position
+  const toViewportY = (yAbsolute: number) => {
+    return (
+      yAbsolute -
+      (iframeScroll.scrollY / iframeScroll.viewportHeight) * 100
+    );
+  };
+
+  const toViewportX = (xAbsolute: number) => {
+    return (
+      xAbsolute -
+      (iframeScroll.scrollX / iframeScroll.viewportWidth) * 100
+    );
   };
 
   const handleSubmitComment = async (data: {
@@ -149,6 +203,32 @@ export default function ReviewOverlay({
     setSidebarOpen(true);
   };
 
+  // Forward wheel events to iframe when in commenting mode
+  // (overlay blocks scroll, so we manually forward it)
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!isCommenting) return;
+      e.preventDefault();
+      try {
+        iframeRef.current?.contentWindow?.scrollBy(0, e.deltaY);
+      } catch {
+        // cross-origin fallback: ignore
+      }
+    };
+
+    overlay.addEventListener("wheel", handleWheel, { passive: false });
+    return () => overlay.removeEventListener("wheel", handleWheel);
+  }, [isCommenting]);
+
+  // Check if a pin is within the visible viewport
+  const isPinVisible = (yAbsolute: number) => {
+    const viewY = toViewportY(yAbsolute);
+    return viewY >= -5 && viewY <= 105;
+  };
+
   return (
     <div className="h-screen flex flex-col">
       {/* Top bar */}
@@ -219,9 +299,10 @@ export default function ReviewOverlay({
 
       {/* Main area */}
       <div className="flex-1 relative overflow-hidden">
-        {/* iframe */}
+        {/* iframe loaded via proxy for scroll tracking */}
         <iframe
-          src={siteUrl}
+          ref={iframeRef}
+          src={proxyUrl}
           className="w-full h-full border-none"
           style={{
             marginRight: sidebarOpen ? "var(--sidebar-width)" : 0,
@@ -234,7 +315,7 @@ export default function ReviewOverlay({
           title={projectName}
         />
 
-        {/* Overlay for clicking */}
+        {/* Overlay for clicking and displaying pins */}
         <div
           ref={overlayRef}
           className={`absolute inset-0 ${
@@ -246,29 +327,35 @@ export default function ReviewOverlay({
           }}
           onClick={handleOverlayClick}
         >
-          {/* Comment pins */}
-          {comments.map((comment, index) => (
-            <CommentPin
-              key={comment.id}
-              number={index + 1}
-              xPercent={comment.xPercent}
-              yPercent={comment.yPercent}
-              resolved={comment.resolved}
-              isActive={activeCommentId === comment.id}
-              onClick={() => handleCommentClick(comment.id)}
-            />
-          ))}
+          {/* Comment pins - positioned relative to current viewport */}
+          {comments.map((comment, index) => {
+            if (!isPinVisible(comment.yPercent)) return null;
+            return (
+              <CommentPin
+                key={comment.id}
+                number={index + 1}
+                xPercent={toViewportX(comment.xPercent)}
+                yPercent={toViewportY(comment.yPercent)}
+                resolved={comment.resolved}
+                isActive={activeCommentId === comment.id}
+                onClick={() => handleCommentClick(comment.id)}
+              />
+            );
+          })}
 
           {/* New comment form */}
           {clickPos && (
             <>
               <div
                 className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                style={{ left: `${clickPos.x}%`, top: `${clickPos.y}%` }}
+                style={{
+                  left: `${toViewportX(clickPos.x)}%`,
+                  top: `${toViewportY(clickPos.y)}%`,
+                }}
               />
               <CommentForm
-                xPercent={clickPos.x}
-                yPercent={clickPos.y}
+                xPercent={toViewportX(clickPos.x)}
+                yPercent={toViewportY(clickPos.y)}
                 onSubmit={handleSubmitComment}
                 onCancel={() => setClickPos(null)}
               />
