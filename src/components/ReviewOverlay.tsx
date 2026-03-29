@@ -58,7 +58,7 @@ export default function ReviewOverlay({
       try {
         const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(
           siteUrl
-        )}&screenshot=true&fullPage=true&meta=false&viewport.width=1280&viewport.height=800`;
+        )}&screenshot=true&meta=false&viewport.width=1280&viewport.height=6000&waitForTimeout=3000`;
 
         const res = await fetch(microlinkUrl);
         const data = await res.json();
@@ -208,7 +208,7 @@ export default function ReviewOverlay({
       try {
         const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(
           siteUrl
-        )}&screenshot=true&fullPage=true&meta=false&viewport.width=1280&viewport.height=800&force=true`;
+        )}&screenshot=true&meta=false&viewport.width=1280&viewport.height=6000&waitForTimeout=3000&force=true`;
 
         const res = await fetch(microlinkUrl);
         const data = await res.json();
