@@ -25,60 +25,35 @@ interface ReviewOverlayProps {
   slug: string;
   siteUrl: string;
   projectName: string;
+  mode?: "admin" | "reviewer";
 }
 
 export default function ReviewOverlay({
   slug,
   siteUrl,
   projectName,
+  mode = "reviewer",
 }: ReviewOverlayProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [isCommenting, setIsCommenting] = useState(false);
-  const [clickPos, setClickPos] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
+  const [clickPos, setClickPos] = useState<{ x: number; y: number } | null>(
+    null
+  );
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const overlayRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Scroll tracking from iframe postMessage
-  const [iframeScroll, setIframeScroll] = useState({
-    scrollY: 0,
-    scrollX: 0,
-    viewportHeight: 1,
-    viewportWidth: 1,
-    pageHeight: 1,
-  });
-
-  // Proxy URL for iframe (same-origin, allows scroll tracking)
-  const proxyUrl = `/api/proxy?url=${encodeURIComponent(siteUrl)}`;
-
-  // Listen for scroll messages from the proxied iframe
-  useEffect(() => {
-    const handleMessage = (e: MessageEvent) => {
-      if (e.data?.type === "webreview-scroll") {
-        setIframeScroll({
-          scrollY: e.data.scrollY || 0,
-          scrollX: e.data.scrollX || 0,
-          viewportHeight: e.data.viewportHeight || 1,
-          viewportWidth: e.data.viewportWidth || 1,
-          pageHeight: e.data.pageHeight || 1,
-        });
-      }
-    };
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  // Track scroll offset when in commenting mode
+  const scrollOffsetRef = useRef(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
 
   const fetchComments = useCallback(async () => {
     try {
       const res = await fetch(`/api/comments?slug=${slug}`);
       if (res.ok) {
-        const data = await res.json();
-        setComments(data);
+        setComments(await res.json());
       }
     } catch {
       // silently fail
@@ -93,39 +68,49 @@ export default function ReviewOverlay({
     return () => clearInterval(interval);
   }, [fetchComments]);
 
+  // Reset scroll offset when toggling commenting mode
+  useEffect(() => {
+    if (isCommenting) {
+      scrollOffsetRef.current = 0;
+      setScrollOffset(0);
+    }
+  }, [isCommenting]);
+
+  // Handle wheel events on overlay in commenting mode
+  // Forward scroll to iframe and track offset
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!isCommenting) return;
+      e.preventDefault();
+
+      // Track offset
+      scrollOffsetRef.current += e.deltaY;
+      setScrollOffset(scrollOffsetRef.current);
+
+      // Try to forward scroll to iframe (works for same-origin)
+      try {
+        iframeRef.current?.contentWindow?.scrollBy(0, e.deltaY);
+      } catch {
+        // Cross-origin: can't forward scroll
+      }
+    };
+
+    overlay.addEventListener("wheel", handleWheel, { passive: false });
+    return () => overlay.removeEventListener("wheel", handleWheel);
+  }, [isCommenting]);
+
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isCommenting || !overlayRef.current) return;
 
     const rect = overlayRef.current.getBoundingClientRect();
-    const xViewport = ((e.clientX - rect.left) / rect.width) * 100;
-    const yViewport = ((e.clientY - rect.top) / rect.height) * 100;
+    const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
+    const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
 
-    // Convert viewport-relative position to absolute page position
-    // yAbsolute = viewport% + (scrollY / viewportHeight) * 100
-    const yAbsolute =
-      yViewport +
-      (iframeScroll.scrollY / iframeScroll.viewportHeight) * 100;
-    const xAbsolute =
-      xViewport +
-      (iframeScroll.scrollX / iframeScroll.viewportWidth) * 100;
-
-    setClickPos({ x: xAbsolute, y: yAbsolute });
+    setClickPos({ x: xPercent, y: yPercent });
     setActiveCommentId(null);
-  };
-
-  // Convert absolute page position to current viewport position
-  const toViewportY = (yAbsolute: number) => {
-    return (
-      yAbsolute -
-      (iframeScroll.scrollY / iframeScroll.viewportHeight) * 100
-    );
-  };
-
-  const toViewportX = (xAbsolute: number) => {
-    return (
-      xAbsolute -
-      (iframeScroll.scrollX / iframeScroll.viewportWidth) * 100
-    );
   };
 
   const handleSubmitComment = async (data: {
@@ -198,47 +183,30 @@ export default function ReviewOverlay({
     }
   };
 
+  const handleDelete = async (id: string) => {
+    try {
+      await fetch(`/api/comments/${id}`, { method: "DELETE" });
+      fetchComments();
+    } catch {
+      // handle error
+    }
+  };
+
   const handleCommentClick = (id: string) => {
     setActiveCommentId(id === activeCommentId ? null : id);
     setSidebarOpen(true);
   };
 
-  // Forward wheel events to iframe when in commenting mode
-  // (overlay blocks scroll, so we manually forward it)
-  useEffect(() => {
-    const overlay = overlayRef.current;
-    if (!overlay) return;
-
-    const handleWheel = (e: WheelEvent) => {
-      if (!isCommenting) return;
-      e.preventDefault();
-      try {
-        iframeRef.current?.contentWindow?.scrollBy(0, e.deltaY);
-      } catch {
-        // cross-origin fallback: ignore
-      }
-    };
-
-    overlay.addEventListener("wheel", handleWheel, { passive: false });
-    return () => overlay.removeEventListener("wheel", handleWheel);
-  }, [isCommenting]);
-
-  // Check if a pin is within the visible viewport
-  const isPinVisible = (yAbsolute: number) => {
-    const viewY = toViewportY(yAbsolute);
-    return viewY >= -5 && viewY <= 105;
-  };
-
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-screen flex flex-col" style={{ "--sidebar-width": "380px" } as React.CSSProperties}>
       {/* Top bar */}
-      <div className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 flex-shrink-0 z-50">
+      <div className="h-14 bg-gray-900 flex items-center justify-between px-4 flex-shrink-0 z-50">
         <div className="flex items-center gap-3">
-          <span className="font-bold text-lg">
-            Web<span className="text-orange-500">Review</span>
+          <span className="font-bold text-lg text-white">
+            Web<span className="text-orange-400">Review</span>
           </span>
-          <span className="text-gray-300">|</span>
-          <span className="text-sm text-gray-600 truncate max-w-xs">
+          <span className="text-gray-600">|</span>
+          <span className="text-sm text-gray-300 truncate max-w-xs">
             {projectName}
           </span>
         </div>
@@ -251,8 +219,8 @@ export default function ReviewOverlay({
             }}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
               isCommenting
-                ? "bg-orange-500 text-white shadow-lg shadow-orange-200"
-                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                ? "bg-orange-500 text-white shadow-lg shadow-orange-500/30"
+                : "bg-gray-700 text-gray-200 hover:bg-gray-600"
             }`}
           >
             <svg
@@ -273,7 +241,7 @@ export default function ReviewOverlay({
 
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="relative bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-lg text-sm transition-colors"
+            className="relative bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-2 rounded-lg text-sm transition-colors"
           >
             <svg
               className="w-4 h-4"
@@ -289,7 +257,7 @@ export default function ReviewOverlay({
               />
             </svg>
             {comments.filter((c) => !c.resolved).length > 0 && (
-              <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">
+              <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold">
                 {comments.filter((c) => !c.resolved).length}
               </span>
             )}
@@ -298,89 +266,74 @@ export default function ReviewOverlay({
       </div>
 
       {/* Main area */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* iframe loaded via proxy for scroll tracking */}
-        <iframe
-          ref={iframeRef}
-          src={proxyUrl}
-          className="w-full h-full border-none"
-          style={{
-            marginRight: sidebarOpen ? "var(--sidebar-width)" : 0,
-            width: sidebarOpen
-              ? "calc(100% - var(--sidebar-width))"
-              : "100%",
-            transition: "width 0.3s, margin-right 0.3s",
-          }}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-          title={projectName}
-        />
+      <div className="flex-1 flex overflow-hidden">
+        {/* Iframe + overlay container */}
+        <div className="flex-1 relative">
+          {/* iframe */}
+          <iframe
+            ref={iframeRef}
+            src={siteUrl}
+            className="w-full h-full border-none"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            title={projectName}
+          />
 
-        {/* Overlay for clicking and displaying pins */}
-        <div
-          ref={overlayRef}
-          className={`absolute inset-0 ${
-            isCommenting ? "cursor-crosshair" : "pointer-events-none"
-          }`}
-          style={{
-            right: sidebarOpen ? "var(--sidebar-width)" : 0,
-            transition: "right 0.3s",
-          }}
-          onClick={handleOverlayClick}
-        >
-          {/* Comment pins - positioned relative to current viewport */}
-          {comments.map((comment, index) => {
-            if (!isPinVisible(comment.yPercent)) return null;
-            return (
+          {/* Overlay for clicking and pins */}
+          <div
+            ref={overlayRef}
+            className={`absolute inset-0 ${
+              isCommenting ? "cursor-crosshair" : "pointer-events-none"
+            }`}
+            onClick={handleOverlayClick}
+          >
+            {/* Comment pins */}
+            {comments.map((comment, index) => (
               <CommentPin
                 key={comment.id}
                 number={index + 1}
-                xPercent={toViewportX(comment.xPercent)}
-                yPercent={toViewportY(comment.yPercent)}
+                xPercent={comment.xPercent}
+                yPercent={comment.yPercent}
                 resolved={comment.resolved}
                 isActive={activeCommentId === comment.id}
                 onClick={() => handleCommentClick(comment.id)}
               />
-            );
-          })}
+            ))}
 
-          {/* New comment form */}
-          {clickPos && (
-            <>
-              <div
-                className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                style={{
-                  left: `${toViewportX(clickPos.x)}%`,
-                  top: `${toViewportY(clickPos.y)}%`,
-                }}
-              />
-              <CommentForm
-                xPercent={toViewportX(clickPos.x)}
-                yPercent={toViewportY(clickPos.y)}
-                onSubmit={handleSubmitComment}
-                onCancel={() => setClickPos(null)}
-              />
-            </>
+            {/* New comment placement */}
+            {clickPos && (
+              <>
+                <div
+                  className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
+                  style={{ left: `${clickPos.x}%`, top: `${clickPos.y}%` }}
+                />
+                <CommentForm
+                  xPercent={clickPos.x}
+                  yPercent={clickPos.y}
+                  onSubmit={handleSubmitComment}
+                  onCancel={() => setClickPos(null)}
+                />
+              </>
+            )}
+          </div>
+
+          {/* Commenting mode banner */}
+          {isCommenting && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-xl z-30 flex items-center gap-2">
+              <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+              Cliquez sur la page pour placer un commentaire
+            </div>
+          )}
+
+          {/* Loading */}
+          {loading && (
+            <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-30 pointer-events-none">
+              <div className="bg-white rounded-xl shadow-lg px-6 py-4 flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-gray-600">Chargement...</span>
+              </div>
+            </div>
           )}
         </div>
-
-        {/* Commenting mode indicator */}
-        {isCommenting && (
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-orange-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg animate-bounce z-30">
-            Cliquez sur le site pour ajouter un commentaire
-          </div>
-        )}
-
-        {/* Loading state */}
-        {loading && (
-          <div className="absolute inset-0 bg-white/50 flex items-center justify-center z-30 pointer-events-none">
-            <div className="bg-white rounded-xl shadow-lg px-6 py-4 flex items-center gap-3">
-              <div className="w-5 h-5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm text-gray-600">
-                Chargement...
-              </span>
-            </div>
-          </div>
-        )}
 
         {/* Sidebar */}
         <CommentSidebar
@@ -389,8 +342,10 @@ export default function ReviewOverlay({
           onCommentClick={handleCommentClick}
           onResolve={handleResolve}
           onReply={handleReply}
+          onDelete={handleDelete}
           isOpen={sidebarOpen}
           onToggle={() => setSidebarOpen(!sidebarOpen)}
+          mode={mode}
         />
       </div>
     </div>

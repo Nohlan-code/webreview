@@ -20,6 +20,7 @@ export default async function ReviewPage({ params }: Props) {
       slug={project.slug}
       siteUrl={project.url}
       projectName={project.name}
+      mode="reviewer"
     />
   );
 }
