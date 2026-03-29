@@ -43,14 +43,80 @@ export default function ReviewOverlay({
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
+
+  // New srcdoc-related state
+  const [proxyHtml, setProxyHtml] = useState<string | null>(null);
+  const [siteLoading, setSiteLoading] = useState(true);
+  const [siteError, setSiteError] = useState<string | null>(null);
+
   const overlayRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const scrollOffsetRef = useRef(0);
   const [scrollY, setScrollY] = useState(0);
   const rafRef = useRef<number>(0);
 
   // Dev mode: can view comments & reply, but cannot add new pins
   const canAddComments = mode !== "dev";
+
+  // Fetch proxy HTML on mount (srcdoc approach)
+  useEffect(() => {
+    async function loadSite() {
+      setSiteLoading(true);
+      setSiteError(null);
+      try {
+        const res = await fetch(
+          `/api/proxy?url=${encodeURIComponent(siteUrl)}`
+        );
+        if (!res.ok) throw new Error(`Erreur ${res.status}`);
+        const html = await res.text();
+        setProxyHtml(html);
+      } catch (err) {
+        setSiteError(
+          err instanceof Error ? err.message : "Erreur de chargement"
+        );
+      } finally {
+        setSiteLoading(false);
+      }
+    }
+    loadSite();
+  }, [siteUrl]);
+
+  // Direct scroll tracking via requestAnimationFrame
+  // Since srcdoc iframe is same-origin, we can read contentWindow.scrollY directly
+  useEffect(() => {
+    if (!proxyHtml) return;
+
+    const trackScroll = () => {
+      try {
+        const iframe = iframeRef.current;
+        if (iframe?.contentWindow) {
+          const sy = iframe.contentWindow.scrollY || 0;
+          if (sy !== scrollOffsetRef.current) {
+            scrollOffsetRef.current = sy;
+            setScrollY(sy);
+          }
+        }
+      } catch {
+        // ignore cross-origin errors (should not happen with srcdoc)
+      }
+      rafRef.current = requestAnimationFrame(trackScroll);
+    };
+
+    const iframe = iframeRef.current;
+    const startTracking = () => {
+      rafRef.current = requestAnimationFrame(trackScroll);
+    };
+
+    if (iframe) {
+      iframe.addEventListener("load", startTracking);
+    }
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      if (iframe) iframe.removeEventListener("load", startTracking);
+    };
+  }, [proxyHtml]);
 
   // Helper: convert stored absolute yPercent to viewport-relative display position
   const getDisplayY = (absoluteYPercent: number) => {
@@ -79,34 +145,15 @@ export default function ReviewOverlay({
     return () => clearInterval(interval);
   }, [fetchComments]);
 
-  // Track iframe scroll via postMessage from injected snippet on target site
-  useEffect(() => {
-    const handleMessage = (e: MessageEvent) => {
-      if (e.data?.type === "webreview-scroll") {
-        scrollOffsetRef.current = e.data.scrollY || 0;
-        // Throttled re-render for pin positions
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = requestAnimationFrame(() => {
-          setScrollY(scrollOffsetRef.current);
-        });
-      }
-    };
-
-    window.addEventListener("message", handleMessage);
-    return () => {
-      window.removeEventListener("message", handleMessage);
-      cancelAnimationFrame(rafRef.current);
-    };
-  }, []);
-
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isCommenting || !overlayRef.current) return;
 
     const rect = overlayRef.current.getBoundingClientRect();
     const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    // Store absolute position: viewport click position + tracked scroll offset
+    // Store absolute position: viewport click position + direct iframe scroll
     const viewportYPx = e.clientY - rect.top;
-    const absoluteYPx = viewportYPx + scrollOffsetRef.current;
+    const iframeScrollY = iframeRef.current?.contentWindow?.scrollY || 0;
+    const absoluteYPx = viewportYPx + iframeScrollY;
     const yPercent = (absoluteYPx / rect.height) * 100;
 
     setClickPos({ x: xPercent, y: yPercent });
@@ -231,8 +278,18 @@ export default function ReviewOverlay({
             className="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-2 rounded-lg text-sm transition-colors"
             title="Ouvrir le site original"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+              />
             </svg>
           </a>
 
@@ -249,8 +306,18 @@ export default function ReviewOverlay({
                   : "bg-gray-700 text-gray-200 hover:bg-gray-600"
               }`}
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 4v16m8-8H4"
+                />
               </svg>
               {isCommenting ? "Mode commentaire actif" : "Ajouter commentaire"}
             </button>
@@ -261,8 +328,18 @@ export default function ReviewOverlay({
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="relative bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-2 rounded-lg text-sm transition-colors"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+              />
             </svg>
             {comments.filter((c) => !c.resolved).length > 0 && (
               <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold">
@@ -277,11 +354,12 @@ export default function ReviewOverlay({
       <div className="flex-1 flex overflow-hidden">
         {/* Iframe + overlay container */}
         <div className="flex-1 relative" ref={containerRef}>
-          {/* iframe - loads the real site */}
+          {/* iframe - loads proxy HTML via srcdoc (same-origin, no X-Frame-Options issues) */}
           <iframe
-            src={`/api/proxy?url=${encodeURIComponent(siteUrl)}`}
+            ref={iframeRef}
+            srcDoc={proxyHtml || ""}
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
             className="w-full h-full border-none"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
             title={projectName}
           />
 
@@ -312,24 +390,28 @@ export default function ReviewOverlay({
             })}
 
             {/* New comment placement */}
-            {clickPos && (() => {
-              const displayY = getDisplayY(clickPos.y);
-              return (
-                <>
-                  <div
-                    className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                    style={{ left: `${clickPos.x}%`, top: `${displayY}%` }}
-                  />
-                  <CommentForm
-                    xPercent={clickPos.x}
-                    yPercent={displayY}
-                    onSubmit={handleSubmitComment}
-                    onCancel={() => setClickPos(null)}
-                    isSubmitting={isSubmitting}
-                  />
-                </>
-              );
-            })()}
+            {clickPos &&
+              (() => {
+                const displayY = getDisplayY(clickPos.y);
+                return (
+                  <>
+                    <div
+                      className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
+                      style={{
+                        left: `${clickPos.x}%`,
+                        top: `${displayY}%`,
+                      }}
+                    />
+                    <CommentForm
+                      xPercent={clickPos.x}
+                      yPercent={displayY}
+                      onSubmit={handleSubmitComment}
+                      onCancel={() => setClickPos(null)}
+                      isSubmitting={isSubmitting}
+                    />
+                  </>
+                );
+              })()}
           </div>
 
           {/* Commenting mode banner */}
@@ -340,8 +422,70 @@ export default function ReviewOverlay({
             </div>
           )}
 
-          {/* Loading */}
-          {loading && (
+          {/* Site loading spinner */}
+          {siteLoading && (
+            <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-30 pointer-events-none">
+              <div className="bg-white rounded-xl shadow-lg px-6 py-4 flex items-center gap-3">
+                <div className="w-5 h-5 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-gray-600">
+                  Chargement du site...
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Site error message */}
+          {siteError && (
+            <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-30">
+              <div className="bg-white rounded-xl shadow-lg px-8 py-6 max-w-md text-center">
+                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg
+                    className="w-6 h-6 text-red-500"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"
+                    />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                  Impossible de charger le site
+                </h3>
+                <p className="text-sm text-gray-500 mb-4">{siteError}</p>
+                <button
+                  onClick={() => {
+                    setSiteError(null);
+                    setSiteLoading(true);
+                    fetch(`/api/proxy?url=${encodeURIComponent(siteUrl)}`)
+                      .then((res) => {
+                        if (!res.ok) throw new Error(`Erreur ${res.status}`);
+                        return res.text();
+                      })
+                      .then((html) => setProxyHtml(html))
+                      .catch((err) =>
+                        setSiteError(
+                          err instanceof Error
+                            ? err.message
+                            : "Erreur de chargement"
+                        )
+                      )
+                      .finally(() => setSiteLoading(false));
+                  }}
+                  className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Reessayer
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Comments loading */}
+          {loading && !siteLoading && (
             <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-30 pointer-events-none">
               <div className="bg-white rounded-xl shadow-lg px-6 py-4 flex items-center gap-3">
                 <div className="w-5 h-5 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
