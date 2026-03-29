@@ -44,9 +44,21 @@ export default function ReviewOverlay({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const scrollOffsetRef = useRef(0);
+  const [scrollY, setScrollY] = useState(0);
+  const rafRef = useRef<number>(0);
 
   // Dev mode: can view comments & reply, but cannot add new pins
   const canAddComments = mode !== "dev";
+
+  // Helper: convert stored absolute yPercent to viewport-relative display position
+  const getDisplayY = (absoluteYPercent: number) => {
+    const overlayHeight = overlayRef.current?.clientHeight || 800;
+    const absoluteYPx = (absoluteYPercent / 100) * overlayHeight;
+    const viewportYPx = absoluteYPx - scrollY;
+    return (viewportYPx / overlayHeight) * 100;
+  };
 
   const fetchComments = useCallback(async () => {
     try {
@@ -67,12 +79,45 @@ export default function ReviewOverlay({
     return () => clearInterval(interval);
   }, [fetchComments]);
 
+  // Track iframe scroll via wheel events on the container
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      // Don't track when in commenting mode (overlay blocks scroll)
+      if (isCommenting) return;
+
+      let delta = e.deltaY;
+      // Normalize deltaMode: 0=pixels, 1=lines (~40px), 2=pages
+      if (e.deltaMode === 1) delta *= 40;
+      if (e.deltaMode === 2) delta *= window.innerHeight;
+
+      scrollOffsetRef.current = Math.max(0, scrollOffsetRef.current + delta);
+
+      // Throttled re-render for pin positions
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        setScrollY(scrollOffsetRef.current);
+      });
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: true });
+    return () => {
+      container.removeEventListener("wheel", handleWheel);
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, [isCommenting]);
+
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isCommenting || !overlayRef.current) return;
 
     const rect = overlayRef.current.getBoundingClientRect();
     const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
+    // Store absolute position: viewport click position + tracked scroll offset
+    const viewportYPx = e.clientY - rect.top;
+    const absoluteYPx = viewportYPx + scrollOffsetRef.current;
+    const yPercent = (absoluteYPx / rect.height) * 100;
 
     setClickPos({ x: xPercent, y: yPercent });
     setActiveCommentId(null);
@@ -241,7 +286,7 @@ export default function ReviewOverlay({
       {/* Main area */}
       <div className="flex-1 flex overflow-hidden">
         {/* Iframe + overlay container */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative" ref={containerRef}>
           {/* iframe - loads the real site */}
           <iframe
             src={siteUrl}
@@ -258,35 +303,43 @@ export default function ReviewOverlay({
             }`}
             onClick={handleOverlayClick}
           >
-            {/* Comment pins */}
-            {comments.map((comment, index) => (
-              <CommentPin
-                key={comment.id}
-                number={index + 1}
-                xPercent={comment.xPercent}
-                yPercent={comment.yPercent}
-                resolved={comment.resolved}
-                isActive={activeCommentId === comment.id}
-                onClick={() => handleCommentClick(comment.id)}
-              />
-            ))}
+            {/* Comment pins - positioned relative to tracked scroll */}
+            {comments.map((comment, index) => {
+              const displayY = getDisplayY(comment.yPercent);
+              // Hide pins that are off-screen
+              if (displayY < -5 || displayY > 105) return null;
+              return (
+                <CommentPin
+                  key={comment.id}
+                  number={index + 1}
+                  xPercent={comment.xPercent}
+                  yPercent={displayY}
+                  resolved={comment.resolved}
+                  isActive={activeCommentId === comment.id}
+                  onClick={() => handleCommentClick(comment.id)}
+                />
+              );
+            })}
 
             {/* New comment placement */}
-            {clickPos && (
-              <>
-                <div
-                  className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                  style={{ left: `${clickPos.x}%`, top: `${clickPos.y}%` }}
-                />
-                <CommentForm
-                  xPercent={clickPos.x}
-                  yPercent={clickPos.y}
-                  onSubmit={handleSubmitComment}
-                  onCancel={() => setClickPos(null)}
-                  isSubmitting={isSubmitting}
-                />
-              </>
-            )}
+            {clickPos && (() => {
+              const displayY = getDisplayY(clickPos.y);
+              return (
+                <>
+                  <div
+                    className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
+                    style={{ left: `${clickPos.x}%`, top: `${displayY}%` }}
+                  />
+                  <CommentForm
+                    xPercent={clickPos.x}
+                    yPercent={displayY}
+                    onSubmit={handleSubmitComment}
+                    onCancel={() => setClickPos(null)}
+                    isSubmitting={isSubmitting}
+                  />
+                </>
+              );
+            })()}
           </div>
 
           {/* Commenting mode banner */}
