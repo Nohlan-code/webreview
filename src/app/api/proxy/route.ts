@@ -146,69 +146,74 @@ export async function GET(request: NextRequest) {
     let html = await res.text();
 
     // ============================================================
-    // STRATEGY: Keep the site functional (carousels, animations, etc.)
-    // Only strip framework hydration scripts that cause errors.
-    // Keep third-party libs (Swiper, Slick, GSAP, etc.) + inline init scripts.
+    // STRATEGY: Keep ALL scripts for 100% faithful rendering.
+    // Protect the SSR HTML from being wiped by hydration errors.
+    // Suppress JS errors silently so carousels, animations, etc. work.
     // ============================================================
 
-    // 1. Remove ONLY framework hydration/build scripts (Next.js, Nuxt, Gatsby, etc.)
-    //    These cause errors when loaded in srcDoc context.
-    const frameworkPatterns = [
-      // Next.js
-      /_next\//i,
-      /__next/i,
-      /next\/dist/i,
-      /next-route-announcer/i,
-      // Nuxt
-      /_nuxt\//i,
-      /__nuxt/i,
-      // Gatsby
-      /gatsby-/i,
-      // Webpack/Vite chunk loaders
-      /webpackJsonp/i,
-      /webpack-/i,
-      // React hydration
-      /__NEXT_DATA__/i,
-      /__NUXT__/i,
-      // Vercel analytics/speed-insights (not needed in review)
-      /vercel\/analytics/i,
-      /vercel\/speed-insights/i,
-      /@vercel\//i,
-      /va\.vercel-scripts/i,
-      /vitals\.vercel-insights/i,
-    ];
-
-    // Helper: check if a script tag matches a framework pattern
-    const isFrameworkScript = (scriptTag: string): boolean => {
-      return frameworkPatterns.some((pattern) => pattern.test(scriptTag));
-    };
-
-    // Remove framework scripts (both <script>...</script> and self-closing <script />)
+    // 1. Only strip analytics/tracking scripts (not needed for review)
     html = html.replace(
-      /<script(?![^>]*data-webreview)[^>]*>[\s\S]*?<\/script>/gi,
-      (match) => isFrameworkScript(match) ? "" : match
+      /<script(?![^>]*data-webreview)[^>]*(?:vercel\/analytics|vercel\/speed-insights|@vercel\/|va\.vercel-scripts|vitals\.vercel-insights|google-analytics|googletagmanager|gtag|fbevents|hotjar)[^>]*>[\s\S]*?<\/script>/gi,
+      ""
     );
     html = html.replace(
-      /<script(?![^>]*data-webreview)[^>]*\/>/gi,
-      (match) => isFrameworkScript(match) ? "" : match
-    );
-
-    // Also remove the __NEXT_DATA__ JSON script specifically (inline data)
-    html = html.replace(
-      /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>[\s\S]*?<\/script>/gi,
+      /<script(?![^>]*data-webreview)[^>]*(?:vercel\/analytics|vercel\/speed-insights|@vercel\/|va\.vercel-scripts|vitals\.vercel-insights|google-analytics|googletagmanager|gtag|fbevents|hotjar)[^>]*\/>/gi,
       ""
     );
 
-    // 2. Wrap remaining third-party scripts in error protection
-    //    so one broken script doesn't kill the whole page
-    const errorWrapper = `<script data-webreview="true">
-window.addEventListener('error', function(e) { e.stopPropagation(); }, true);
-window.addEventListener('unhandledrejection', function(e) { e.preventDefault(); }, true);
+    // 2. Inject robust error protection + hydration guard BEFORE any other script
+    //    This protects the SSR HTML from being wiped by React/Next hydration errors
+    const hydrationGuard = `<script data-webreview="true">
+(function(){
+  // Suppress all JS errors silently so the page stays intact
+  window.addEventListener('error', function(e) {
+    e.stopImmediatePropagation();
+    if(e.preventDefault) e.preventDefault();
+    return true;
+  }, true);
+  window.addEventListener('unhandledrejection', function(e) {
+    e.stopImmediatePropagation();
+    if(e.preventDefault) e.preventDefault();
+  }, true);
+
+  // Save the SSR HTML before any framework can wipe it
+  var _savedBody = null;
+  document.addEventListener('DOMContentLoaded', function() {
+    _savedBody = document.body.innerHTML;
+  });
+
+  // Watch for React/Next.js hydration wiping the page
+  // If the body becomes empty or near-empty, restore it
+  var _checkCount = 0;
+  var _checker = setInterval(function() {
+    _checkCount++;
+    if (_checkCount > 50) { clearInterval(_checker); return; }
+    if (_savedBody && document.body && document.body.innerHTML.length < _savedBody.length * 0.3) {
+      document.body.innerHTML = _savedBody;
+      clearInterval(_checker);
+    }
+  }, 200);
+
+  // Override console.error to suppress noisy hydration warnings
+  var _origError = console.error;
+  console.error = function() {
+    var msg = arguments[0];
+    if (typeof msg === 'string' && (
+      msg.indexOf('Hydration') !== -1 ||
+      msg.indexOf('hydrat') !== -1 ||
+      msg.indexOf('mismatch') !== -1 ||
+      msg.indexOf('did not match') !== -1 ||
+      msg.indexOf('server-rendered') !== -1 ||
+      msg.indexOf('Text content') !== -1
+    )) return;
+    return _origError.apply(console, arguments);
+  };
+})();
 </script>`;
     if (html.match(/<head[^>]*>/i)) {
-      html = html.replace(/<head[^>]*>/i, `$&${errorWrapper}`);
+      html = html.replace(/<head[^>]*>/i, `$&${hydrationGuard}`);
     } else {
-      html = errorWrapper + html;
+      html = hydrationGuard + html;
     }
 
     // 3. Remove meta CSP that blocks framing
