@@ -150,8 +150,72 @@ export async function GET(request: NextRequest) {
     // Use <base> tag so all relative URLs resolve to the target origin.
     // Keep ALL scripts intact so carousels/animations work.
     // Monkey-patch fetch/XHR for dynamic requests.
+    // Inline external CSS to avoid CORS issues in srcDoc iframe.
     // The HTML stays almost identical → React hydration succeeds.
     // ============================================================
+
+    // 0. Inline external CSS: fetch all <link rel="stylesheet"> and replace with <style>
+    //    This fixes CORS-blocked CSS in srcDoc iframe context
+    const cssLinks: { fullMatch: string; href: string }[] = [];
+    let linkMatch;
+
+    // Match both orderings: rel before href and href before rel
+    const combinedRegex = /<link[^>]*(?:rel=["']stylesheet["'][^>]*href=["']([^"']+)["']|href=["']([^"']+)["'][^>]*rel=["']stylesheet["'])[^>]*\/?>/gi;
+    while ((linkMatch = combinedRegex.exec(html)) !== null) {
+      const href = linkMatch[1] || linkMatch[2];
+      if (href) {
+        cssLinks.push({ fullMatch: linkMatch[0], href });
+      }
+    }
+
+    // Fetch all CSS files in parallel
+    if (cssLinks.length > 0) {
+      const cssResults = await Promise.allSettled(
+        cssLinks.map(async (link) => {
+          let cssUrl = link.href;
+          // Resolve relative URLs
+          if (cssUrl.startsWith('/') && !cssUrl.startsWith('//')) {
+            cssUrl = origin + cssUrl;
+          } else if (cssUrl.startsWith('//')) {
+            cssUrl = 'https:' + cssUrl;
+          } else if (!cssUrl.startsWith('http')) {
+            cssUrl = origin + '/' + cssUrl;
+          }
+
+          try {
+            const cssRes = await fetchWithRetry(cssUrl, {
+              headers: {
+                "User-Agent": ua,
+                "Accept": "text/css,*/*;q=0.1",
+                "Referer": origin + "/",
+              },
+            }, 2);
+
+            if (cssRes.ok) {
+              let cssText = await cssRes.text();
+              // Fix relative url() references in CSS to point to the origin
+              cssText = cssText.replace(/url\(\s*["']?\/?(?!data:|https?:|\/\/)(.*?)["']?\s*\)/gi, (match, path) => {
+                return `url(${origin}/${path})`;
+              });
+              return { fullMatch: link.fullMatch, css: cssText };
+            }
+          } catch {
+            // If fetch fails, keep the original link tag
+          }
+          return { fullMatch: link.fullMatch, css: null };
+        })
+      );
+
+      // Replace link tags with inline style tags
+      for (const result of cssResults) {
+        if (result.status === 'fulfilled' && result.value.css !== null) {
+          html = html.replace(
+            result.value.fullMatch,
+            `<style data-webreview-inlined="true">${result.value.css}</style>`
+          );
+        }
+      }
+    }
 
     // 1. Only strip analytics/tracking scripts (not needed for review)
     html = html.replace(
