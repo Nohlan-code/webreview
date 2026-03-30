@@ -179,9 +179,9 @@ export async function GET(request: NextRequest) {
     ];
 
     // Helper: check if a script tag matches a framework pattern
-    function isFrameworkScript(scriptTag: string): boolean {
+    const isFrameworkScript = (scriptTag: string): boolean => {
       return frameworkPatterns.some((pattern) => pattern.test(scriptTag));
-    }
+    };
 
     // Remove framework scripts (both <script>...</script> and self-closing <script />)
     html = html.replace(
