@@ -83,16 +83,24 @@ export async function GET(request: NextRequest) {
 
     // If still getting an error after retries, return a friendly error
     if (!res.ok) {
-      const statusMessages: Record<number, string> = {
-        403: "Le site bloque l'acces depuis notre serveur (protection anti-bot).",
-        429: "Le site limite le nombre de requetes. Attendez quelques secondes puis cliquez Reessayer.",
-        500: "Le site cible rencontre une erreur interne.",
-        502: "Le site cible est temporairement inaccessible.",
-        503: "Le site cible est en maintenance. Reessayez dans quelques instants.",
-      };
-      const msg =
-        statusMessages[res.status] ||
-        `Le site a repondu avec l'erreur ${res.status}.`;
+      // Detect Vercel Attack Challenge Mode specifically
+      const isVercelChallenge = res.headers.get("x-vercel-mitigated") === "challenge";
+
+      let msg: string;
+      if (isVercelChallenge) {
+        msg = "Ce site a le mode \"Attack Challenge\" active sur Vercel, ce qui bloque le chargement. Pour corriger : allez dans les parametres Vercel du site cible → Firewall → desactivez Attack Challenge Mode.";
+      } else {
+        const statusMessages: Record<number, string> = {
+          403: "Le site bloque l'acces depuis notre serveur (protection anti-bot). Si c'est votre site, ajoutez une exception pour les requetes serveur.",
+          429: "Le site limite le nombre de requetes. Si c'est un site Vercel, verifiez que le mode Attack Challenge n'est pas active.",
+          500: "Le site cible rencontre une erreur interne.",
+          502: "Le site cible est temporairement inaccessible.",
+          503: "Le site cible est en maintenance. Reessayez dans quelques instants.",
+        };
+        msg =
+          statusMessages[res.status] ||
+          `Le site a repondu avec l'erreur ${res.status}.`;
+      }
 
       return new NextResponse(
         `<!DOCTYPE html><html><head><meta charset="utf-8"><style>

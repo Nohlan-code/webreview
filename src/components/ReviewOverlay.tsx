@@ -52,8 +52,6 @@ export default function ReviewOverlay({
   const [proxyHtml, setProxyHtml] = useState<string | null>(null);
   const [siteLoading, setSiteLoading] = useState(true);
   const [siteError, setSiteError] = useState<string | null>(null);
-  // Fallback: load site directly in iframe if proxy fails (429, Cloudflare, etc.)
-  const [useDirectIframe, setUseDirectIframe] = useState(false);
 
   // Container size for scale calculation
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
@@ -101,12 +99,11 @@ export default function ReviewOverlay({
     return () => ro.disconnect();
   }, []);
 
-  // Fetch proxy HTML on mount (srcdoc approach), fallback to direct iframe
+  // Fetch proxy HTML on mount (srcdoc approach)
   useEffect(() => {
     async function loadSite() {
       setSiteLoading(true);
       setSiteError(null);
-      setUseDirectIframe(false);
       try {
         const res = await fetch(
           `/api/proxy?url=${encodeURIComponent(siteUrl)}`
@@ -115,20 +112,18 @@ export default function ReviewOverlay({
         const html = await res.text();
         // Check if the proxy returned an error page (429, 403, etc.)
         if (html.includes("Impossible de charger le site")) {
-          // Fallback: try loading the site directly in an iframe
-          // This works for sites that block server requests (Cloudflare)
-          // but allow normal browser loading
-          console.log("[WebReview] Proxy failed, falling back to direct iframe");
-          setUseDirectIframe(true);
-          setProxyHtml(null);
+          // Extract error message from the proxy error page
+          const match = html.match(/<p[^>]*>([^<]*(?:429|403|502|503)[^<]*)<\/p>/i);
+          setSiteError(
+            match?.[1] || "Le site bloque les requetes du serveur. Desactivez la protection anti-bot sur le site cible."
+          );
         } else {
           setProxyHtml(html);
         }
-      } catch {
-        // Network error → try direct iframe as fallback
-        console.log("[WebReview] Proxy error, falling back to direct iframe");
-        setUseDirectIframe(true);
-        setProxyHtml(null);
+      } catch (err) {
+        setSiteError(
+          err instanceof Error ? err.message : "Erreur de chargement"
+        );
       } finally {
         setSiteLoading(false);
       }
@@ -504,24 +499,14 @@ export default function ReviewOverlay({
                 left: 0,
               }}
             >
-              {/* iframe - srcDoc (proxy) or src (direct fallback) */}
-              {useDirectIframe ? (
-                <iframe
-                  ref={iframeRef}
-                  src={siteUrl}
-                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-                  className="w-full h-full border-none"
-                  title={projectName}
-                />
-              ) : (
-                <iframe
-                  ref={iframeRef}
-                  srcDoc={proxyHtml || ""}
-                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-                  className="w-full h-full border-none"
-                  title={projectName}
-                />
-              )}
+              {/* iframe */}
+              <iframe
+                ref={iframeRef}
+                srcDoc={proxyHtml || ""}
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                className="w-full h-full border-none"
+                title={projectName}
+              />
 
               {/* Overlay for clicking and pins */}
               <div
@@ -591,15 +576,6 @@ export default function ReviewOverlay({
             </div>
           )}
 
-          {/* Direct iframe mode indicator */}
-          {useDirectIframe && !siteLoading && (
-            <div className="absolute top-3 left-3 bg-amber-500/90 text-white text-xs px-3 py-1.5 rounded-full z-30 flex items-center gap-1.5">
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Mode direct (scroll limit&eacute;)
-            </div>
-          )}
 
           {/* Commenting mode banner */}
           {isCommenting && (
@@ -622,8 +598,8 @@ export default function ReviewOverlay({
             </div>
           )}
 
-          {/* Site error - only show if not in direct iframe fallback mode */}
-          {siteError && !useDirectIframe && (
+          {/* Site error */}
+          {siteError && (
             <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-30">
               <div className="bg-white rounded-xl shadow-lg px-8 py-6 max-w-md text-center">
                 <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
