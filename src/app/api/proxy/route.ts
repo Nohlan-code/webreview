@@ -146,62 +146,78 @@ export async function GET(request: NextRequest) {
     let html = await res.text();
 
     // ============================================================
-    // STRATEGY: Keep ALL scripts for 100% faithful rendering.
-    // Protect the SSR HTML from being wiped by hydration errors.
-    // Suppress JS errors silently so carousels, animations, etc. work.
+    // STRATEGY: Minimal HTML modifications for maximum fidelity.
+    // Use <base> tag so all relative URLs resolve to the target origin.
+    // Keep ALL scripts intact so carousels/animations work.
+    // Monkey-patch fetch/XHR for dynamic requests.
+    // The HTML stays almost identical → React hydration succeeds.
     // ============================================================
 
     // 1. Only strip analytics/tracking scripts (not needed for review)
     html = html.replace(
-      /<script(?![^>]*data-webreview)[^>]*(?:vercel\/analytics|vercel\/speed-insights|@vercel\/|va\.vercel-scripts|vitals\.vercel-insights|google-analytics|googletagmanager|gtag|fbevents|hotjar)[^>]*>[\s\S]*?<\/script>/gi,
-      ""
-    );
-    html = html.replace(
-      /<script(?![^>]*data-webreview)[^>]*(?:vercel\/analytics|vercel\/speed-insights|@vercel\/|va\.vercel-scripts|vitals\.vercel-insights|google-analytics|googletagmanager|gtag|fbevents|hotjar)[^>]*\/>/gi,
+      /<script(?![^>]*data-webreview)[^>]*(?:vercel\/analytics|vercel\/speed-insights|@vercel\/|va\.vercel-scripts|vitals\.vercel-insights|google-analytics|googletagmanager|gtag\/js|fbevents|hotjar)[^>]*>[\s\S]*?<\/script>/gi,
       ""
     );
 
-    // 2. Inject robust error protection + hydration guard BEFORE any other script
-    //    This protects the SSR HTML from being wiped by React/Next hydration errors
-    const hydrationGuard = `<script data-webreview="true">
+    // 2. Remove meta CSP that blocks framing
+    html = html.replace(
+      /<meta[^>]*http-equiv=["']content-security-policy["'][^>]*>/gi,
+      ""
+    );
+
+    // 3. Remove any existing <base> tag, then inject ours pointing to the target origin
+    //    This makes ALL relative URLs (src, href, etc.) resolve to the target site
+    //    WITHOUT modifying the HTML text → React hydration sees original DOM
+    html = html.replace(/<base[^>]*>/gi, "");
+
+    const baseTag = `<base href="${origin}/" data-webreview="true">`;
+
+    // 4. Inject error suppression + fetch/XHR monkey-patch BEFORE any scripts
+    //    This must go right after <head> and BEFORE any other script
+    const proxySetup = `${baseTag}
+<script data-webreview="true">
 (function(){
-  // Suppress all JS errors silently so the page stays intact
+  var ORIGIN = ${JSON.stringify(origin)};
+
+  // --- Error suppression: prevent any JS error from breaking the page ---
   window.addEventListener('error', function(e) {
     e.stopImmediatePropagation();
-    if(e.preventDefault) e.preventDefault();
     return true;
   }, true);
   window.addEventListener('unhandledrejection', function(e) {
-    e.stopImmediatePropagation();
-    if(e.preventDefault) e.preventDefault();
+    e.preventDefault();
   }, true);
 
-  // Save the SSR HTML before any framework can wipe it
-  var _savedBody = null;
-  document.addEventListener('DOMContentLoaded', function() {
-    _savedBody = document.body.innerHTML;
-  });
-
-  // Watch for React/Next.js hydration wiping the page
-  // If the body becomes empty or near-empty, restore it
-  var _checkCount = 0;
-  var _checker = setInterval(function() {
-    _checkCount++;
-    if (_checkCount > 50) { clearInterval(_checker); return; }
-    if (_savedBody && document.body && document.body.innerHTML.length < _savedBody.length * 0.3) {
-      document.body.innerHTML = _savedBody;
-      clearInterval(_checker);
+  // --- Monkey-patch fetch: redirect root-relative URLs to target origin ---
+  var _origFetch = window.fetch;
+  window.fetch = function(input, init) {
+    if (typeof input === 'string' && input.startsWith('/') && !input.startsWith('//')) {
+      input = ORIGIN + input;
+    } else if (input instanceof Request && input.url.startsWith(window.location.origin)) {
+      var path = input.url.slice(window.location.origin.length);
+      input = new Request(ORIGIN + path, input);
     }
-  }, 200);
+    return _origFetch.call(this, input, init);
+  };
 
-  // Override console.error to suppress noisy hydration warnings
+  // --- Monkey-patch XMLHttpRequest: redirect root-relative URLs ---
+  var _origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    if (typeof url === 'string' && url.startsWith('/') && !url.startsWith('//')) {
+      url = ORIGIN + url;
+    } else if (typeof url === 'string' && url.startsWith(window.location.origin + '/')) {
+      url = ORIGIN + url.slice(window.location.origin.length);
+    }
+    return _origOpen.apply(this, [method, url, ...Array.prototype.slice.call(arguments, 2)]);
+  };
+
+  // --- Suppress noisy console errors from hydration ---
   var _origError = console.error;
   console.error = function() {
     var msg = arguments[0];
     if (typeof msg === 'string' && (
       msg.indexOf('Hydration') !== -1 ||
       msg.indexOf('hydrat') !== -1 ||
-      msg.indexOf('mismatch') !== -1 ||
       msg.indexOf('did not match') !== -1 ||
       msg.indexOf('server-rendered') !== -1 ||
       msg.indexOf('Text content') !== -1
@@ -209,48 +225,23 @@ export async function GET(request: NextRequest) {
     return _origError.apply(console, arguments);
   };
 })();
-</script>`;
+</script>
+<style data-webreview="true">
+  html { scroll-behavior: auto !important; }
+  img[loading="lazy"] { loading: eager; }
+  img { opacity: 1 !important; }
+</style>`;
+
     if (html.match(/<head[^>]*>/i)) {
-      html = html.replace(/<head[^>]*>/i, `$&${hydrationGuard}`);
+      html = html.replace(/<head[^>]*>/i, `$&${proxySetup}`);
     } else {
-      html = hydrationGuard + html;
+      html = proxySetup + html;
     }
 
-    // 3. Remove meta CSP that blocks framing
-    html = html.replace(
-      /<meta[^>]*http-equiv=["']content-security-policy["'][^>]*>/gi,
-      ""
-    );
-
-    // 4. Remove noscript tags (they show fallback content meant for no-JS)
+    // 5. Remove noscript tags (they show fallback content meant for no-JS)
     html = html.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
 
-    // 5. Rewrite all root-relative URLs in HTML attributes to absolute
-    html = html.replace(
-      /(\s(?:src|href|action|poster|data-src|data-srcset|content)=["'])\/(?!\/)/gi,
-      `$1${origin}/`
-    );
-    // Handle srcset
-    html = html.replace(
-      /(\ssrcset=["'])\/(?!\/)/gi,
-      `$1${origin}/`
-    );
-    // Handle CSS url() with root-relative paths in inline styles
-    html = html.replace(/(url\(["']?)\/(?!\/)/gi, `$1${origin}/`);
-
-    // 6. Fix styles for review mode
-    const reviewStyles = `<style data-webreview="true">
-      html { scroll-behavior: auto !important; }
-      img[loading="lazy"] { loading: eager; }
-      img { opacity: 1 !important; }
-    </style>`;
-    if (html.match(/<head[^>]*>/i)) {
-      html = html.replace(/<head[^>]*>/i, `$&${reviewStyles}`);
-    } else {
-      html = reviewStyles + html;
-    }
-
-    // 7. Inject our scroll tracking script (runs in the page)
+    // 6. Inject scroll tracking + link interception before </body>
     const trackingScript = `
 <script data-webreview="true">
 (function(){
@@ -284,7 +275,6 @@ export async function GET(request: NextRequest) {
 
   // --- Intercept link clicks to stay in proxy ---
   var O=${JSON.stringify(origin)};
-  var P="/api/proxy?url=";
   document.addEventListener("click",function(e){
     var a=e.target.closest("a");
     if(!a)return;
@@ -295,7 +285,8 @@ export async function GET(request: NextRequest) {
     try{
       var u=new URL(h,O+"/");
       if(u.origin===O){
-        window.location.href=P+encodeURIComponent(u.href);
+        // Navigate iframe through proxy (use absolute URL to avoid <base> interference)
+        window.location.href=window.location.origin+"/api/proxy?url="+encodeURIComponent(u.href);
       } else {
         window.open(u.href,"_blank");
       }
