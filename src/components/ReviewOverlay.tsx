@@ -29,6 +29,8 @@ interface ReviewOverlayProps {
   mode?: "admin" | "reviewer" | "dev";
 }
 
+const SIDEBAR_WIDTH = 380;
+
 export default function ReviewOverlay({
   slug,
   siteUrl,
@@ -46,10 +48,13 @@ export default function ReviewOverlay({
   const [loading, setLoading] = useState(true);
   const [currentPagePath, setCurrentPagePath] = useState("/");
 
-  // New srcdoc-related state
+  // Srcdoc-related state
   const [proxyHtml, setProxyHtml] = useState<string | null>(null);
   const [siteLoading, setSiteLoading] = useState(true);
   const [siteError, setSiteError] = useState<string | null>(null);
+
+  // Container size for scale calculation
+  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
 
   const overlayRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -66,6 +71,33 @@ export default function ReviewOverlay({
   const pageComments = comments.filter(
     (c) => c.pagePath === currentPagePath
   );
+
+  // Scale: the iframe always renders at "full width" (as if sidebar was closed)
+  // When sidebar is open, the container is narrower, so we scale down the iframe
+  const fullWidth =
+    sidebarOpen && containerSize.w > 0
+      ? containerSize.w + SIDEBAR_WIDTH
+      : containerSize.w;
+  const scale =
+    containerSize.w > 0 && fullWidth > 0
+      ? containerSize.w / fullWidth
+      : 1;
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+
+  // Track container size with ResizeObserver
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setContainerSize({
+        w: Math.round(entry.contentRect.width),
+        h: Math.round(entry.contentRect.height),
+      });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Fetch proxy HTML on mount (srcdoc approach)
   useEffect(() => {
@@ -96,7 +128,6 @@ export default function ReviewOverlay({
       if (e.data?.type === "webreview-page") {
         const newPath = e.data.pagePath || "/";
         setCurrentPagePath(newPath);
-        // Reset click position when page changes
         setClickPos(null);
         setActiveCommentId(null);
       }
@@ -116,23 +147,20 @@ export default function ReviewOverlay({
         if (iframe?.contentWindow && iframe?.contentDocument) {
           const sy = iframe.contentWindow.scrollY || 0;
           scrollOffsetRef.current = sy;
-          // Update page height
           const ph = iframe.contentDocument.documentElement.scrollHeight;
           if (ph > 0) pageHeightRef.current = ph;
-          // Update CSS custom property directly (no React re-render!)
           if (overlayRef.current) {
             overlayRef.current.style.setProperty("--wr-scroll", String(sy));
           }
         }
       } catch {
-        // ignore cross-origin errors (should not happen with srcdoc)
+        // ignore
       }
       rafRef.current = requestAnimationFrame(trackScroll);
     };
 
     const iframe = iframeRef.current;
     const startTracking = () => {
-      // Cancel any previous tracking loop before starting new one
       cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(trackScroll);
     };
@@ -157,7 +185,7 @@ export default function ReviewOverlay({
     return () => clearInterval(interval);
   }, [pageHeight]);
 
-  // Forward wheel events from the overlay/container to the iframe content
+  // Forward wheel events from the container to the iframe content
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -200,10 +228,12 @@ export default function ReviewOverlay({
     if (!isCommenting || !overlayRef.current) return;
 
     const rect = overlayRef.current.getBoundingClientRect();
+    const s = scaleRef.current;
+    // xPercent is scale-invariant (percentage of width)
     const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    const viewportYPx = e.clientY - rect.top;
+    // Y needs to be divided by scale to get iframe coordinates
+    const viewportYPx = (e.clientY - rect.top) / s;
     const absoluteYPx = viewportYPx + scrollOffsetRef.current;
-    // Store absolute pixels for display, convert to percent on submit
     setClickPos({ x: xPercent, y: absoluteYPx });
     setActiveCommentId(null);
   };
@@ -345,7 +375,7 @@ export default function ReviewOverlay({
             </svg>
           </a>
 
-          {/* Comment mode toggle - only for reviewer & admin */}
+          {/* Comment mode toggle */}
           {canAddComments && (
             <button
               onClick={() => {
@@ -402,77 +432,93 @@ export default function ReviewOverlay({
         </div>
       </div>
 
-      {/* Main area - iframe takes FULL width, sidebar overlays */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* Iframe + overlay container - FULL SIZE */}
-        <div className="absolute inset-0" ref={containerRef}>
-          {/* iframe - loads proxy HTML via srcdoc (same-origin, no X-Frame-Options issues) */}
-          <iframe
-            ref={iframeRef}
-            srcDoc={proxyHtml || ""}
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-            className="w-full h-full border-none"
-            title={projectName}
-          />
-
-          {/* Overlay for clicking and pins */}
-          <div
-            ref={overlayRef}
-            className={`absolute inset-0 overflow-hidden ${
-              isCommenting ? "cursor-crosshair" : "pointer-events-none"
-            }`}
-            onClick={handleOverlayClick}
-            style={{ "--wr-scroll": "0" } as React.CSSProperties}
-          >
-            {/* Pins container - CSS transform handles scroll */}
+      {/* Main area - flex layout: scaled iframe + sidebar */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Site container - flex-1, gets remaining space */}
+        <div className="flex-1 relative overflow-hidden" ref={containerRef}>
+          {/* Scaled wrapper: iframe renders at full width, scaled to fit container */}
+          {containerSize.w > 0 && (
             <div
-              className="absolute inset-x-0 top-0 pointer-events-none"
               style={{
-                height: `${pageHeight}px`,
-                transform:
-                  "translateY(calc(-1px * var(--wr-scroll, 0)))",
-                willChange: "transform",
+                width: `${fullWidth}px`,
+                height: `${containerSize.h / scale}px`,
+                transform: `scale(${scale})`,
+                transformOrigin: "top left",
+                position: "absolute",
+                top: 0,
+                left: 0,
               }}
             >
-              {/* Each pin at its absolute page position - ONLY for current page */}
-              {pageComments.map((comment, index) => {
-                const absoluteYPx =
-                  (comment.yPercent / 100) * pageHeight;
-                return (
-                  <CommentPin
-                    key={comment.id}
-                    number={index + 1}
-                    xPercent={comment.xPercent}
-                    yPx={absoluteYPx}
-                    resolved={comment.resolved}
-                    isActive={activeCommentId === comment.id}
-                    onClick={() => handleCommentClick(comment.id)}
-                  />
-                );
-              })}
+              {/* iframe */}
+              <iframe
+                ref={iframeRef}
+                srcDoc={proxyHtml || ""}
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                className="w-full h-full border-none"
+                title={projectName}
+              />
 
-              {/* New comment placement */}
-              {clickPos && (
-                <>
-                  <div
-                    className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
-                    style={{
-                      left: `${clickPos.x}%`,
-                      top: `${clickPos.y}px`,
-                    }}
-                  />
-                  <CommentForm
-                    xPercent={clickPos.x}
-                    yPx={clickPos.y}
-                    onSubmit={handleSubmitComment}
-                    onCancel={() => setClickPos(null)}
-                    isSubmitting={isSubmitting}
-                  />
-                </>
-              )}
+              {/* Overlay for clicking and pins */}
+              <div
+                ref={overlayRef}
+                className={`absolute inset-0 overflow-hidden ${
+                  isCommenting ? "cursor-crosshair" : "pointer-events-none"
+                }`}
+                onClick={handleOverlayClick}
+                style={{ "--wr-scroll": "0" } as React.CSSProperties}
+              >
+                {/* Pins container - CSS transform handles scroll */}
+                <div
+                  className="absolute inset-x-0 top-0 pointer-events-none"
+                  style={{
+                    height: `${pageHeight}px`,
+                    transform:
+                      "translateY(calc(-1px * var(--wr-scroll, 0)))",
+                    willChange: "transform",
+                  }}
+                >
+                  {/* Pins for current page */}
+                  {pageComments.map((comment, index) => {
+                    const absoluteYPx =
+                      (comment.yPercent / 100) * pageHeight;
+                    return (
+                      <CommentPin
+                        key={comment.id}
+                        number={index + 1}
+                        xPercent={comment.xPercent}
+                        yPx={absoluteYPx}
+                        resolved={comment.resolved}
+                        isActive={activeCommentId === comment.id}
+                        onClick={() => handleCommentClick(comment.id)}
+                      />
+                    );
+                  })}
+
+                  {/* New comment placement */}
+                  {clickPos && (
+                    <>
+                      <div
+                        className="absolute w-3 h-3 bg-orange-500 rounded-full z-30 -ml-1.5 -mt-1.5 animate-pulse"
+                        style={{
+                          left: `${clickPos.x}%`,
+                          top: `${clickPos.y}px`,
+                        }}
+                      />
+                      <CommentForm
+                        xPercent={clickPos.x}
+                        yPx={clickPos.y}
+                        onSubmit={handleSubmitComment}
+                        onCancel={() => setClickPos(null)}
+                        isSubmitting={isSubmitting}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
 
+          {/* These are in container coordinates (not scaled) */}
           {/* Commenting mode banner */}
           {isCommenting && (
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-xl z-30 flex items-center gap-2">
@@ -493,7 +539,7 @@ export default function ReviewOverlay({
             </div>
           )}
 
-          {/* Site error message */}
+          {/* Site error */}
           {siteError && (
             <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-30">
               <div className="bg-white rounded-xl shadow-lg px-8 py-6 max-w-md text-center">
@@ -554,14 +600,12 @@ export default function ReviewOverlay({
           )}
         </div>
 
-        {/* Sidebar - absolute overlay on right, OUTSIDE containerRef so wheel events don't interfere */}
-        <div
-          className={`absolute right-0 top-0 bottom-0 z-40 transition-transform duration-300 ${
-            sidebarOpen ? "translate-x-0" : "translate-x-full"
-          }`}
-          style={{ width: "380px" }}
-        >
-          <div className="h-full shadow-2xl">
+        {/* Sidebar - flex child, doesn't affect iframe rendering */}
+        {sidebarOpen && (
+          <div
+            className="h-full flex-shrink-0 shadow-2xl"
+            style={{ width: SIDEBAR_WIDTH }}
+          >
             <CommentSidebar
               comments={pageComments}
               activeCommentId={activeCommentId}
@@ -574,7 +618,7 @@ export default function ReviewOverlay({
               mode={mode}
             />
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
