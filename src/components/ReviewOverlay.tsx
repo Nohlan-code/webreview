@@ -48,10 +48,10 @@ export default function ReviewOverlay({
   const [loading, setLoading] = useState(true);
   const [currentPagePath, setCurrentPagePath] = useState("/");
 
-  // Site loading state
+  // Srcdoc-related state
+  const [proxyHtml, setProxyHtml] = useState<string | null>(null);
   const [siteLoading, setSiteLoading] = useState(true);
   const [siteError, setSiteError] = useState<string | null>(null);
-  const proxyUrl = `/api/proxy?url=${encodeURIComponent(siteUrl)}`;
 
   // Container size for scale calculation
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
@@ -91,24 +91,38 @@ export default function ReviewOverlay({
     return () => ro.disconnect();
   }, []);
 
-  // Detect errors after iframe loads
-  const handleIframeLoad = useCallback(() => {
-    setSiteLoading(false);
-    try {
-      const iframe = iframeRef.current;
-      if (iframe?.contentDocument) {
-        const text = iframe.contentDocument.body?.innerText || "";
-        if (text.includes("Impossible de charger le site")) {
-          const match = text.match(/(Le site.*?)(?:\n|$)/i);
-          setSiteError(match?.[1] || "Le site bloque les requetes du serveur.");
+  // Fetch proxy HTML on mount (srcdoc approach)
+  useEffect(() => {
+    async function loadSite() {
+      setSiteLoading(true);
+      setSiteError(null);
+      try {
+        const res = await fetch(
+          `/api/proxy?url=${encodeURIComponent(siteUrl)}`
+        );
+        if (!res.ok) throw new Error(`Erreur ${res.status}`);
+        const html = await res.text();
+        // Check if the proxy returned an error page (429, 403, etc.)
+        if (html.includes("Impossible de charger le site")) {
+          const match = html.match(/<p[^>]*>([^<]*(?:429|403|502|503|Attack)[^<]*)<\/p>/i);
+          setSiteError(
+            match?.[1] || "Le site bloque les requetes du serveur. Desactivez la protection anti-bot sur le site cible."
+          );
+        } else {
+          setProxyHtml(html);
         }
+      } catch (err) {
+        setSiteError(
+          err instanceof Error ? err.message : "Erreur de chargement"
+        );
+      } finally {
+        setSiteLoading(false);
       }
-    } catch {
-      // Cross-origin access failed - site loaded fine from target
     }
-  }, []);
+    loadSite();
+  }, [siteUrl]);
 
-  // Listen for page change messages from the iframe
+  // Listen for page change + navigation messages from the iframe
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
       if (e.data?.type === "webreview-page") {
@@ -116,6 +130,21 @@ export default function ReviewOverlay({
         setCurrentPagePath(newPath);
         setClickPos(null);
         setActiveCommentId(null);
+      }
+      // Handle internal navigation: reload proxy with new URL
+      if (e.data?.type === "webreview-navigate" && e.data.url) {
+        setSiteLoading(true);
+        fetch(`/api/proxy?url=${encodeURIComponent(e.data.url)}`)
+          .then((res) => res.text())
+          .then((html) => {
+            if (html.includes("Impossible de charger le site")) {
+              setSiteError("Le site bloque les requetes.");
+            } else {
+              setProxyHtml(html);
+            }
+          })
+          .catch(() => {})
+          .finally(() => setSiteLoading(false));
       }
     };
     window.addEventListener("message", handleMessage);
@@ -125,6 +154,8 @@ export default function ReviewOverlay({
   // Direct scroll tracking via requestAnimationFrame
   // Updates CSS custom property directly - NO React re-renders during scroll
   useEffect(() => {
+    if (!proxyHtml) return;
+
     const trackScroll = () => {
       try {
         const iframe = iframeRef.current;
@@ -157,7 +188,7 @@ export default function ReviewOverlay({
       cancelAnimationFrame(rafRef.current);
       if (iframe) iframe.removeEventListener("load", startTracking);
     };
-  }, []);
+  }, [proxyHtml]);
 
   // Sync pageHeightRef to state periodically (for pin rendering)
   useEffect(() => {
@@ -470,14 +501,13 @@ export default function ReviewOverlay({
                 left: 0,
               }}
             >
-              {/* iframe - loads via src for full JS fidelity */}
+              {/* iframe */}
               <iframe
                 ref={iframeRef}
-                src={proxyUrl}
+                srcDoc={proxyHtml || ""}
                 sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
                 className="w-full h-full border-none"
                 title={projectName}
-                onLoad={handleIframeLoad}
               />
 
               {/* Overlay for clicking and pins */}
@@ -591,11 +621,20 @@ export default function ReviewOverlay({
                   onClick={() => {
                     setSiteError(null);
                     setSiteLoading(true);
-                    // Force iframe reload by resetting src
-                    const iframe = iframeRef.current;
-                    if (iframe) {
-                      iframe.src = proxyUrl + "&t=" + Date.now();
-                    }
+                    fetch(`/api/proxy?url=${encodeURIComponent(siteUrl)}`)
+                      .then((res) => {
+                        if (!res.ok) throw new Error(`Erreur ${res.status}`);
+                        return res.text();
+                      })
+                      .then((html) => setProxyHtml(html))
+                      .catch((err) =>
+                        setSiteError(
+                          err instanceof Error
+                            ? err.message
+                            : "Erreur de chargement"
+                        )
+                      )
+                      .finally(() => setSiteLoading(false));
                   }}
                   className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >

@@ -172,7 +172,7 @@ export async function GET(request: NextRequest) {
 
     const baseTag = `<base href="${origin}/" data-webreview="true">`;
 
-    // 4. Inject error suppression + fetch/XHR monkey-patch BEFORE any scripts
+    // 4. Inject error suppression + fetch/XHR monkey-patch + DOM protection
     //    This must go right after <head> and BEFORE any other script
     const proxySetup = `${baseTag}
 <script data-webreview="true">
@@ -191,27 +191,26 @@ export async function GET(request: NextRequest) {
   // --- Monkey-patch fetch: redirect root-relative URLs to target origin ---
   var _origFetch = window.fetch;
   window.fetch = function(input, init) {
-    if (typeof input === 'string' && input.startsWith('/') && !input.startsWith('//')) {
-      input = ORIGIN + input;
-    } else if (input instanceof Request && input.url.startsWith(window.location.origin)) {
-      var path = input.url.slice(window.location.origin.length);
-      input = new Request(ORIGIN + path, input);
-    }
+    try {
+      if (typeof input === 'string' && input.startsWith('/') && !input.startsWith('//')) {
+        input = ORIGIN + input;
+      }
+    } catch(e) {}
     return _origFetch.call(this, input, init);
   };
 
   // --- Monkey-patch XMLHttpRequest: redirect root-relative URLs ---
   var _origOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url) {
-    if (typeof url === 'string' && url.startsWith('/') && !url.startsWith('//')) {
-      url = ORIGIN + url;
-    } else if (typeof url === 'string' && url.startsWith(window.location.origin + '/')) {
-      url = ORIGIN + url.slice(window.location.origin.length);
-    }
-    return _origOpen.apply(this, [method, url, ...Array.prototype.slice.call(arguments, 2)]);
+    try {
+      if (typeof url === 'string' && url.startsWith('/') && !url.startsWith('//')) {
+        url = ORIGIN + url;
+      }
+    } catch(e) {}
+    return _origOpen.apply(this, [method, url].concat(Array.prototype.slice.call(arguments, 2)));
   };
 
-  // --- Suppress noisy console errors from hydration ---
+  // --- Suppress noisy console errors ---
   var _origError = console.error;
   console.error = function() {
     var msg = arguments[0];
@@ -220,10 +219,45 @@ export async function GET(request: NextRequest) {
       msg.indexOf('hydrat') !== -1 ||
       msg.indexOf('did not match') !== -1 ||
       msg.indexOf('server-rendered') !== -1 ||
-      msg.indexOf('Text content') !== -1
+      msg.indexOf('Text content') !== -1 ||
+      msg.indexOf('Application error') !== -1
     )) return;
     return _origError.apply(console, arguments);
   };
+
+  // --- DOM Protection: prevent React/Next.js from wiping the page ---
+  // Save SSR HTML and use MutationObserver to restore if frameworks destroy it
+  var _savedHTML = null;
+  var _protected = false;
+
+  document.addEventListener('DOMContentLoaded', function() {
+    _savedHTML = document.body.innerHTML;
+
+    // Watch for the body content being replaced (React error boundary, hydration wipe)
+    var observer = new MutationObserver(function(mutations) {
+      if (_protected) return;
+      // Detect if content was drastically reduced or replaced with error page
+      var currentHTML = document.body.innerHTML;
+      var hasError = currentHTML.indexOf('Application error') !== -1 ||
+                     currentHTML.indexOf('client-side exception') !== -1;
+      var wasWiped = _savedHTML && currentHTML.length < _savedHTML.length * 0.3;
+
+      if (hasError || wasWiped) {
+        _protected = true;
+        observer.disconnect();
+        document.body.innerHTML = _savedHTML;
+      }
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+
+    // Stop observing after 15 seconds (page should be stable by then)
+    setTimeout(function() { observer.disconnect(); }, 15000);
+  });
 })();
 </script>
 <style data-webreview="true">
@@ -285,8 +319,11 @@ export async function GET(request: NextRequest) {
     try{
       var u=new URL(h,O+"/");
       if(u.origin===O){
-        // Navigate iframe through proxy (use absolute URL to avoid <base> interference)
-        window.location.href=window.location.origin+"/api/proxy?url="+encodeURIComponent(u.href);
+        // Notify parent to reload with new URL
+        window.parent.postMessage({
+          type:"webreview-navigate",
+          url:u.href
+        },"*");
       } else {
         window.open(u.href,"_blank");
       }
