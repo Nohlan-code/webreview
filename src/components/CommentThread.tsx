@@ -40,12 +40,18 @@ export default function CommentThread({
   mode,
 }: CommentThreadProps) {
   const [replyContent, setReplyContent] = useState("");
-  const [replyAuthor, setReplyAuthor] = useState("");
+  const [replyAuthor, setReplyAuthor] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("webreview-author-name") || "";
+    }
+    return "";
+  });
   const [showReply, setShowReply] = useState(false);
 
   const handleReply = (e: React.FormEvent) => {
     e.preventDefault();
     if (!replyContent.trim() || !replyAuthor.trim()) return;
+    localStorage.setItem("webreview-author-name", replyAuthor.trim());
     onReply(comment.id, replyContent.trim(), replyAuthor.trim());
     setReplyContent("");
     setShowReply(false);

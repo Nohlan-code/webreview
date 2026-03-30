@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+
+const AUTHOR_STORAGE_KEY = "webreview-author-name";
 
 interface CommentFormProps {
   xPercent: number;
@@ -19,11 +21,38 @@ export default function CommentForm({
 }: CommentFormProps) {
   const [content, setContent] = useState("");
   const [author, setAuthor] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  // Load saved author name from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(AUTHOR_STORAGE_KEY);
+    if (saved) {
+      setAuthor(saved);
+      // Focus textarea since name is already filled
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    } else {
+      setTimeout(() => nameRef.current?.focus(), 50);
+    }
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!content.trim() || !author.trim() || isSubmitting) return;
+    // Save author name for next time
+    localStorage.setItem(AUTHOR_STORAGE_KEY, author.trim());
     onSubmit({ content: content.trim(), author: author.trim() });
+  };
+
+  // Cmd/Ctrl+Enter to submit
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      if (content.trim() && author.trim() && !isSubmitting) {
+        localStorage.setItem(AUTHOR_STORAGE_KEY, author.trim());
+        onSubmit({ content: content.trim(), author: author.trim() });
+      }
+    }
   };
 
   // Position form to the right of pin, or left if too far right
@@ -38,21 +67,23 @@ export default function CommentForm({
         transform: "translateY(-50%)",
       }}
       onClick={(e) => e.stopPropagation()}
+      onKeyDown={handleKeyDown}
     >
       <form onSubmit={handleSubmit} className="space-y-3">
         <div>
           <input
+            ref={nameRef}
             type="text"
             placeholder="Votre nom"
             value={author}
             onChange={(e) => setAuthor(e.target.value)}
             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-            autoFocus
             disabled={isSubmitting}
           />
         </div>
         <div>
           <textarea
+            ref={textareaRef}
             placeholder="Votre commentaire..."
             value={content}
             onChange={(e) => setContent(e.target.value)}
@@ -85,6 +116,9 @@ export default function CommentForm({
             Annuler
           </button>
         </div>
+        <p className="text-[10px] text-gray-400 text-center">
+          ⌘+Entree pour envoyer
+        </p>
       </form>
     </div>
   );

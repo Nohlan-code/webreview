@@ -185,6 +185,31 @@ export default function ReviewOverlay({
     return () => clearInterval(interval);
   }, [pageHeight]);
 
+  // Keyboard shortcuts: Escape = cancel comment mode, C = toggle comment mode
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      // Don't capture when typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if (e.key === "Escape") {
+        if (clickPos) {
+          setClickPos(null);
+        } else if (isCommenting) {
+          setIsCommenting(false);
+        }
+      }
+      if (e.key === "c" || e.key === "C") {
+        if (canAddComments && !e.metaKey && !e.ctrlKey) {
+          setIsCommenting((prev) => !prev);
+          setClickPos(null);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [clickPos, isCommenting, canAddComments]);
+
   // Forward wheel events from the container to the iframe content
   useEffect(() => {
     const container = containerRef.current;
@@ -220,7 +245,7 @@ export default function ReviewOverlay({
 
   useEffect(() => {
     fetchComments();
-    const interval = setInterval(fetchComments, 30000);
+    const interval = setInterval(fetchComments, 5000);
     return () => clearInterval(interval);
   }, [fetchComments]);
 
@@ -323,8 +348,24 @@ export default function ReviewOverlay({
   };
 
   const handleCommentClick = (id: string) => {
-    setActiveCommentId(id === activeCommentId ? null : id);
+    const isDeselecting = id === activeCommentId;
+    setActiveCommentId(isDeselecting ? null : id);
     setSidebarOpen(true);
+
+    // Scroll iframe to the comment position
+    if (!isDeselecting) {
+      const comment = comments.find((c) => c.id === id);
+      if (comment && iframeRef.current?.contentWindow) {
+        const targetY = (comment.yPercent / 100) * pageHeightRef.current;
+        const viewportH = containerSize.h / scaleRef.current;
+        // Scroll so pin is ~1/3 from top of viewport
+        const scrollTo = Math.max(0, targetY - viewportH / 3);
+        iframeRef.current.contentWindow.scrollTo({
+          top: scrollTo,
+          behavior: "smooth",
+        });
+      }
+    }
   };
 
   return (
@@ -519,11 +560,19 @@ export default function ReviewOverlay({
           )}
 
           {/* These are in container coordinates (not scaled) */}
+          {/* Zoom indicator */}
+          {scale < 0.99 && (
+            <div className="absolute top-3 right-3 bg-gray-900/80 text-white text-xs px-2.5 py-1 rounded-full z-30 font-mono">
+              {Math.round(scale * 100)}%
+            </div>
+          )}
+
           {/* Commenting mode banner */}
           {isCommenting && (
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-xl z-30 flex items-center gap-2">
               <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
-              Scrollez vers la zone souhaitee, puis cliquez pour commenter
+              Cliquez pour commenter
+              <span className="text-gray-400 text-xs ml-1">(Echap pour annuler)</span>
             </div>
           )}
 
