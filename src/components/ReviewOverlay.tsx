@@ -72,18 +72,10 @@ export default function ReviewOverlay({
     (c) => c.pagePath === currentPagePath
   );
 
-  // Scale: the iframe always renders at "full width" (as if sidebar was closed)
-  // When sidebar is open, the container is narrower, so we scale down the iframe
-  const fullWidth =
-    sidebarOpen && containerSize.w > 0
-      ? containerSize.w + SIDEBAR_WIDTH
-      : containerSize.w;
-  const scale =
-    containerSize.w > 0 && fullWidth > 0
-      ? containerSize.w / fullWidth
-      : 1;
-  const scaleRef = useRef(scale);
-  scaleRef.current = scale;
+  // No scale - site always renders at full viewport width
+  // Sidebar overlays on top (like Frame.io)
+  const scale = 1;
+  const scaleRef = useRef(1);
 
   // Track container size with ResizeObserver
   useEffect(() => {
@@ -262,11 +254,9 @@ export default function ReviewOverlay({
     if (!isCommenting || !overlayRef.current) return;
 
     const rect = overlayRef.current.getBoundingClientRect();
-    const s = scaleRef.current;
-    // xPercent is scale-invariant (percentage of width)
+    // Direct coordinates - no scale adjustment needed
     const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
-    // Y needs to be divided by scale to get iframe coordinates
-    const viewportYPx = (e.clientY - rect.top) / s;
+    const viewportYPx = e.clientY - rect.top;
     const absoluteYPx = viewportYPx + scrollOffsetRef.current;
     setClickPos({ x: xPercent, y: absoluteYPx });
     setActiveCommentId(null);
@@ -482,18 +472,16 @@ export default function ReviewOverlay({
         </div>
       </div>
 
-      {/* Main area - flex layout: scaled iframe + sidebar */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Site container - flex-1, gets remaining space */}
-        <div className="flex-1 relative overflow-hidden" ref={containerRef}>
-          {/* Scaled wrapper: iframe renders at full width, scaled to fit container */}
+      {/* Main area - site full width, sidebar overlays on top */}
+      <div className="flex-1 relative overflow-hidden">
+        {/* Site container - always full width */}
+        <div className="absolute inset-0" ref={containerRef}>
+          {/* Full-size wrapper - no scale, no transform */}
           {containerSize.w > 0 && (
             <div
               style={{
-                width: `${fullWidth}px`,
-                height: `${containerSize.h / scale}px`,
-                transform: `scale(${scale})`,
-                transformOrigin: "top left",
+                width: `${containerSize.w}px`,
+                height: `${containerSize.h}px`,
                 position: "absolute",
                 top: 0,
                 left: 0,
@@ -569,12 +557,6 @@ export default function ReviewOverlay({
           )}
 
           {/* These are in container coordinates (not scaled) */}
-          {/* Zoom indicator */}
-          {scale < 0.99 && (
-            <div className="absolute top-3 right-3 bg-gray-900/80 text-white text-xs px-2.5 py-1 rounded-full z-30 font-mono">
-              {Math.round(scale * 100)}%
-            </div>
-          )}
 
 
           {/* Commenting mode banner */}
@@ -659,10 +641,10 @@ export default function ReviewOverlay({
           )}
         </div>
 
-        {/* Sidebar - flex child, doesn't affect iframe rendering */}
+        {/* Sidebar - overlay on the right, doesn't affect site layout */}
         {sidebarOpen && (
           <div
-            className="h-full flex-shrink-0 shadow-2xl"
+            className="absolute top-0 right-0 h-full z-40 shadow-2xl bg-white"
             style={{ width: SIDEBAR_WIDTH }}
           >
             <CommentSidebar
