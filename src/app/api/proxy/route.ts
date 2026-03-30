@@ -146,29 +146,81 @@ export async function GET(request: NextRequest) {
     let html = await res.text();
 
     // ============================================================
-    // STRATEGY: Render site as STATIC HTML for review purposes.
-    // Remove all scripts to prevent JS hydration errors.
-    // Keep CSS, images, fonts → site looks exactly like the real one.
-    // Inject only our scroll tracking + review scripts.
+    // STRATEGY: Keep the site functional (carousels, animations, etc.)
+    // Only strip framework hydration scripts that cause errors.
+    // Keep third-party libs (Swiper, Slick, GSAP, etc.) + inline init scripts.
     // ============================================================
 
-    // 1. Remove ALL <script> tags (inline and external) except ours
+    // 1. Remove ONLY framework hydration/build scripts (Next.js, Nuxt, Gatsby, etc.)
+    //    These cause errors when loaded in srcDoc context.
+    const frameworkPatterns = [
+      // Next.js
+      /_next\//i,
+      /__next/i,
+      /next\/dist/i,
+      /next-route-announcer/i,
+      // Nuxt
+      /_nuxt\//i,
+      /__nuxt/i,
+      // Gatsby
+      /gatsby-/i,
+      // Webpack/Vite chunk loaders
+      /webpackJsonp/i,
+      /webpack-/i,
+      // React hydration
+      /__NEXT_DATA__/i,
+      /__NUXT__/i,
+      // Vercel analytics/speed-insights (not needed in review)
+      /vercel\/analytics/i,
+      /vercel\/speed-insights/i,
+      /@vercel\//i,
+      /va\.vercel-scripts/i,
+      /vitals\.vercel-insights/i,
+    ];
+
+    // Helper: check if a script tag matches a framework pattern
+    function isFrameworkScript(scriptTag: string): boolean {
+      return frameworkPatterns.some((pattern) => pattern.test(scriptTag));
+    }
+
+    // Remove framework scripts (both <script>...</script> and self-closing <script />)
     html = html.replace(
       /<script(?![^>]*data-webreview)[^>]*>[\s\S]*?<\/script>/gi,
+      (match) => isFrameworkScript(match) ? "" : match
+    );
+    html = html.replace(
+      /<script(?![^>]*data-webreview)[^>]*\/>/gi,
+      (match) => isFrameworkScript(match) ? "" : match
+    );
+
+    // Also remove the __NEXT_DATA__ JSON script specifically (inline data)
+    html = html.replace(
+      /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>[\s\S]*?<\/script>/gi,
       ""
     );
-    html = html.replace(/<script(?![^>]*data-webreview)[^>]*\/>/gi, "");
 
-    // 2. Remove meta CSP that blocks framing
+    // 2. Wrap remaining third-party scripts in error protection
+    //    so one broken script doesn't kill the whole page
+    const errorWrapper = `<script data-webreview="true">
+window.addEventListener('error', function(e) { e.stopPropagation(); }, true);
+window.addEventListener('unhandledrejection', function(e) { e.preventDefault(); }, true);
+</script>`;
+    if (html.match(/<head[^>]*>/i)) {
+      html = html.replace(/<head[^>]*>/i, `$&${errorWrapper}`);
+    } else {
+      html = errorWrapper + html;
+    }
+
+    // 3. Remove meta CSP that blocks framing
     html = html.replace(
       /<meta[^>]*http-equiv=["']content-security-policy["'][^>]*>/gi,
       ""
     );
 
-    // 3. Remove noscript tags (they show fallback content meant for no-JS)
+    // 4. Remove noscript tags (they show fallback content meant for no-JS)
     html = html.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
 
-    // 4. Rewrite all root-relative URLs in HTML attributes to absolute
+    // 5. Rewrite all root-relative URLs in HTML attributes to absolute
     html = html.replace(
       /(\s(?:src|href|action|poster|data-src|data-srcset|content)=["'])\/(?!\/)/gi,
       `$1${origin}/`
@@ -181,7 +233,7 @@ export async function GET(request: NextRequest) {
     // Handle CSS url() with root-relative paths in inline styles
     html = html.replace(/(url\(["']?)\/(?!\/)/gi, `$1${origin}/`);
 
-    // 5. Fix styles for review mode
+    // 6. Fix styles for review mode
     const reviewStyles = `<style data-webreview="true">
       html { scroll-behavior: auto !important; }
       img[loading="lazy"] { loading: eager; }
@@ -193,7 +245,7 @@ export async function GET(request: NextRequest) {
       html = reviewStyles + html;
     }
 
-    // 6. Inject our scroll tracking script (runs in the static page)
+    // 7. Inject our scroll tracking script (runs in the page)
     const trackingScript = `
 <script data-webreview="true">
 (function(){
