@@ -48,8 +48,8 @@ export default function ReviewOverlay({
   const [loading, setLoading] = useState(true);
   const [currentPagePath, setCurrentPagePath] = useState("/");
 
-  // Srcdoc-related state
-  const [proxyHtml, setProxyHtml] = useState<string | null>(null);
+  // Iframe src approach - load proxy URL directly for full JS fidelity
+  const [proxyUrl, setProxyUrl] = useState<string | null>(null);
   const [siteLoading, setSiteLoading] = useState(true);
   const [siteError, setSiteError] = useState<string | null>(null);
 
@@ -91,35 +91,11 @@ export default function ReviewOverlay({
     return () => ro.disconnect();
   }, []);
 
-  // Fetch proxy HTML on mount (srcdoc approach)
+  // Set proxy URL on mount (src approach - browser loads page natively for full JS fidelity)
   useEffect(() => {
-    async function loadSite() {
-      setSiteLoading(true);
-      setSiteError(null);
-      try {
-        const res = await fetch(
-          `/api/proxy?url=${encodeURIComponent(siteUrl)}`
-        );
-        if (!res.ok) throw new Error(`Erreur ${res.status}`);
-        const html = await res.text();
-        // Check if the proxy returned an error page (429, 403, etc.)
-        if (html.includes("Impossible de charger le site")) {
-          const match = html.match(/<p[^>]*>([^<]*(?:429|403|502|503|Attack)[^<]*)<\/p>/i);
-          setSiteError(
-            match?.[1] || "Le site bloque les requetes du serveur. Desactivez la protection anti-bot sur le site cible."
-          );
-        } else {
-          setProxyHtml(html);
-        }
-      } catch (err) {
-        setSiteError(
-          err instanceof Error ? err.message : "Erreur de chargement"
-        );
-      } finally {
-        setSiteLoading(false);
-      }
-    }
-    loadSite();
+    setSiteLoading(true);
+    setSiteError(null);
+    setProxyUrl(`/api/proxy?url=${encodeURIComponent(siteUrl)}`);
   }, [siteUrl]);
 
   // Listen for page change + navigation messages from the iframe
@@ -131,20 +107,10 @@ export default function ReviewOverlay({
         setClickPos(null);
         setActiveCommentId(null);
       }
-      // Handle internal navigation: reload proxy with new URL
+      // Handle internal navigation: update iframe src with new URL
       if (e.data?.type === "webreview-navigate" && e.data.url) {
         setSiteLoading(true);
-        fetch(`/api/proxy?url=${encodeURIComponent(e.data.url)}`)
-          .then((res) => res.text())
-          .then((html) => {
-            if (html.includes("Impossible de charger le site")) {
-              setSiteError("Le site bloque les requetes.");
-            } else {
-              setProxyHtml(html);
-            }
-          })
-          .catch(() => {})
-          .finally(() => setSiteLoading(false));
+        setProxyUrl(`/api/proxy?url=${encodeURIComponent(e.data.url)}`);
       }
     };
     window.addEventListener("message", handleMessage);
@@ -154,7 +120,7 @@ export default function ReviewOverlay({
   // Direct scroll tracking via requestAnimationFrame
   // Updates CSS custom property directly - NO React re-renders during scroll
   useEffect(() => {
-    if (!proxyHtml) return;
+    if (!proxyUrl) return;
 
     const trackScroll = () => {
       try {
@@ -188,7 +154,7 @@ export default function ReviewOverlay({
       cancelAnimationFrame(rafRef.current);
       if (iframe) iframe.removeEventListener("load", startTracking);
     };
-  }, [proxyHtml]);
+  }, [proxyUrl]);
 
   // Sync pageHeightRef to state periodically (for pin rendering)
   useEffect(() => {
@@ -501,14 +467,32 @@ export default function ReviewOverlay({
                 left: 0,
               }}
             >
-              {/* iframe */}
-              <iframe
-                ref={iframeRef}
-                srcDoc={proxyHtml || ""}
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-                className="w-full h-full border-none"
-                title={projectName}
-              />
+              {/* iframe - src approach for full JS fidelity */}
+              {proxyUrl && (
+                <iframe
+                  ref={iframeRef}
+                  src={proxyUrl}
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                  className="w-full h-full border-none"
+                  title={projectName}
+                  onLoad={() => {
+                    setSiteLoading(false);
+                    // Check if proxy returned an error page
+                    try {
+                      const doc = iframeRef.current?.contentDocument;
+                      if (doc) {
+                        const text = doc.body?.textContent || "";
+                        if (text.includes("Impossible de charger le site")) {
+                          const match = text.match(/(Ce site.*?\.)/);
+                          setSiteError(match?.[1] || "Le site bloque les requetes du serveur.");
+                        }
+                      }
+                    } catch {
+                      // Cross-origin error - ignore
+                    }
+                  }}
+                />
+              )}
 
               {/* Overlay for clicking and pins */}
               <div
@@ -621,20 +605,8 @@ export default function ReviewOverlay({
                   onClick={() => {
                     setSiteError(null);
                     setSiteLoading(true);
-                    fetch(`/api/proxy?url=${encodeURIComponent(siteUrl)}`)
-                      .then((res) => {
-                        if (!res.ok) throw new Error(`Erreur ${res.status}`);
-                        return res.text();
-                      })
-                      .then((html) => setProxyHtml(html))
-                      .catch((err) =>
-                        setSiteError(
-                          err instanceof Error
-                            ? err.message
-                            : "Erreur de chargement"
-                        )
-                      )
-                      .finally(() => setSiteLoading(false));
+                    // Force reload by appending cache-bust param
+                    setProxyUrl(`/api/proxy?url=${encodeURIComponent(siteUrl)}&_t=${Date.now()}`);
                   }}
                   className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
