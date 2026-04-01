@@ -290,9 +290,40 @@ export async function GET(request: NextRequest) {
   };
 
   // --- DOM Protection: prevent React/Next.js from wiping the page ---
-  // Save SSR HTML and use MutationObserver to restore if frameworks destroy it
+  // Save SSR HTML and use MutationObserver to restore if frameworks destroy it.
+  // Also capture any <style> tags created dynamically by JS (e.g. carousel CSS)
+  // and move them to <head> so they survive body restoration.
   var _savedHTML = null;
   var _protected = false;
+
+  // Watch for dynamically-created <style> tags anywhere in the document
+  // and copy them to <head> so they persist even if body gets wiped
+  var _styleObserver = new MutationObserver(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var added = mutations[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var node = added[j];
+        // Direct <style> tag added
+        if (node.nodeName === 'STYLE' && !node.getAttribute('data-webreview') && !node.getAttribute('data-wr-captured')) {
+          node.setAttribute('data-wr-captured', 'true');
+          var clone = node.cloneNode(true);
+          clone.setAttribute('data-wr-dynamic', 'true');
+          document.head.appendChild(clone);
+        }
+        // Element with <style> children added (e.g. a div containing styles)
+        if (node.querySelectorAll) {
+          var styles = node.querySelectorAll('style:not([data-webreview]):not([data-wr-captured])');
+          for (var k = 0; k < styles.length; k++) {
+            styles[k].setAttribute('data-wr-captured', 'true');
+            var c = styles[k].cloneNode(true);
+            c.setAttribute('data-wr-dynamic', 'true');
+            document.head.appendChild(c);
+          }
+        }
+      }
+    }
+  });
+  _styleObserver.observe(document.documentElement, { childList: true, subtree: true });
 
   document.addEventListener('DOMContentLoaded', function() {
     _savedHTML = document.body.innerHTML;
@@ -320,7 +351,10 @@ export async function GET(request: NextRequest) {
     });
 
     // Stop observing after 15 seconds (page should be stable by then)
-    setTimeout(function() { observer.disconnect(); }, 15000);
+    setTimeout(function() {
+      observer.disconnect();
+      _styleObserver.disconnect();
+    }, 15000);
   });
 })();
 </script>
