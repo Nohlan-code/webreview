@@ -336,10 +336,32 @@ export async function GET(request: NextRequest) {
       html = proxySetup + html;
     }
 
-    // 5. Remove noscript tags (they show fallback content meant for no-JS)
+    // 5. Move <style> tags from <body> to </head> so they survive DOM mutations
+    //    In srcDoc iframes, framework hydration can wipe body content including
+    //    inline <style> tags. Moving them to <head> keeps them safe.
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    if (bodyMatch) {
+      const bodyContent = bodyMatch[1];
+      const bodyStyles: string[] = [];
+      const bodyWithoutStyles = bodyContent.replace(
+        /<style(?![^>]*data-webreview)[^>]*>[\s\S]*?<\/style>/gi,
+        (match) => {
+          bodyStyles.push(match);
+          return "";
+        }
+      );
+      if (bodyStyles.length > 0) {
+        // Insert collected body styles before </head>
+        const stylesBlock = bodyStyles.join("\n");
+        html = html.replace(bodyMatch[1], bodyWithoutStyles);
+        html = html.replace(/<\/head>/i, `${stylesBlock}\n</head>`);
+      }
+    }
+
+    // 6. Remove noscript tags (they show fallback content meant for no-JS)
     html = html.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
 
-    // 6. Inject scroll tracking + link interception before </body>
+    // 7. Inject scroll tracking + link interception before </body>
     const trackingScript = `
 <script data-webreview="true">
 (function(){
