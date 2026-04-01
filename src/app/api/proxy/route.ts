@@ -243,6 +243,67 @@ export async function GET(request: NextRequest) {
 (function(){
   var ORIGIN = ${JSON.stringify(origin)};
 
+  // --- Prevent navigation away from proxy page ---
+  // Next.js router may try to redirect to the target origin via the <base> tag.
+  // Block all forms of navigation that would leave our proxy page.
+  if (window.self !== window.top) {
+    // Intercept history.pushState / replaceState to prevent router navigation
+    var _origPushState = history.pushState;
+    var _origReplaceState = history.replaceState;
+    history.pushState = function() {
+      try {
+        var url = arguments[2];
+        if (url && typeof url === 'string') {
+          var u = new URL(url, window.location.href);
+          if (u.origin !== window.location.origin) return;
+        }
+      } catch(e) {}
+      return _origPushState.apply(this, arguments);
+    };
+    history.replaceState = function() {
+      try {
+        var url = arguments[2];
+        if (url && typeof url === 'string') {
+          var u = new URL(url, window.location.href);
+          if (u.origin !== window.location.origin) return;
+        }
+      } catch(e) {}
+      return _origReplaceState.apply(this, arguments);
+    };
+
+    // Block top-level navigation via location.assign/replace/href
+    var _origAssign = window.location.assign;
+    var _origReplace = window.location.replace;
+    try {
+      Object.defineProperty(window, 'location', {
+        get: function() { return location; },
+        set: function(v) { /* block navigation */ }
+      });
+    } catch(e) {}
+    if (_origAssign) {
+      try {
+        window.location.assign = function(url) {
+          try {
+            var u = new URL(url, window.location.href);
+            if (u.origin !== window.location.origin) return;
+          } catch(e) {}
+          return _origAssign.call(window.location, url);
+        };
+      } catch(e) {}
+    }
+    if (_origReplace) {
+      try {
+        window.location.replace = function(url) {
+          try {
+            var u = new URL(url, window.location.href);
+            if (u.origin !== window.location.origin) return;
+          } catch(e) {}
+          return _origReplace.call(window.location, url);
+        };
+      } catch(e) {}
+    }
+  }
+
   // --- Error suppression: prevent any JS error from breaking the page ---
   window.addEventListener('error', function(e) {
     e.stopImmediatePropagation();
